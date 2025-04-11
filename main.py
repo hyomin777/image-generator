@@ -53,12 +53,7 @@ def main():
     print(f"Generating image for prompt: '{args.prompt}'...")
     with torch.no_grad():
         image = model(
-            prompt=args.prompt,
-            negative_prompt=args.negative_prompt,
-            num_inference_steps=args.steps,
-            guidance_scale=args.guidance_scale,
-            width=args.width,
-            height=args.height
+            text=args.prompt
         )
 
     # Save image
