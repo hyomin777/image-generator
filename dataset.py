@@ -55,14 +55,14 @@ class ImageDataset(Dataset):
                 image_input = self.preprocess(image).unsqueeze(0)
                 text_input = clip.tokenize([text], truncate=True)
 
-                with torch.no_grad():
-                    image_features = self.clip_model.encode_image(image_input)
-                    text_features = self.clip_model.encode_text(text_input)
-                    similarity = torch.cosine_similarity(image_features, text_features)
+#                with torch.no_grad():
+#                    image_features = self.clip_model.encode_image(image_input)
+#                   text_features = self.clip_model.encode_text(text_input)
+#                    similarity = torch.cosine_similarity(image_features, text_features)
 
-                if similarity.item() >= min_clip_score:
-                    self.filtered_files.append(img_file)
-                    self.image_to_tags[img_file] = text
+#                if similarity.item() >= min_clip_score:
+                self.filtered_files.append(img_file)
+                self.image_to_tags[img_file] = text
 
             except Exception as e:
                 print(f"Error processing {img_file}: {str(e)}")

@@ -12,6 +12,10 @@ LANG_MAP = {
 }
 
 
+def get_cache():
+    return cache
+
+
 def cache_translation(func):
     @wraps(func)
     def wrapper(text:str, target_lang='en'):
@@ -53,7 +57,7 @@ def translate(text:str, target_lang='en') -> str:
 
 def save_cache(path='cache.json'):
     with open(path, 'w', encoding='utf-8') as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2)
+        json.dump(get_cache(), f, ensure_ascii=False, indent=2)
     print(f'[cache] saved {len(cache)} entries to {path}')
 
 
