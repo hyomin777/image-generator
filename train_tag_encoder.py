@@ -29,7 +29,7 @@ def train_tag_encoder(rank, world_size, args):
 
     # tag encoder
     tag_encoder = TagEncoder().to(device)
-    tag_encoder = DDP(tag_encoder, device_ids=[rank])
+    tag_encoder = DDP(tag_encoder, device_ids=[rank], find_unused_parameters=True)
 
     optimizer = optim.AdamW(tag_encoder.parameters(), lr=args.lr)
 
@@ -59,6 +59,7 @@ def train_tag_encoder(rank, world_size, args):
                 image_embeds = clip.get_image_features(pixel_values=images)
 
             tag_embeds = tag_encoder(tags)
+            print(f"[rank {rank}] tag_embeds shape: {tag_embeds.shape}")
             loss = cosine_contrastive_loss(tag_embeds, image_embeds)
 
             optimizer.zero_grad()

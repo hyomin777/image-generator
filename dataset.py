@@ -5,11 +5,12 @@ from pathlib import Path
 import clip
 import torch
 from torch.utils.data import Dataset
+from torch.distributed import is_initialized, get_rank
 
 from tqdm import tqdm
 from PIL import Image
 
-from utils.translator import translate, save_cache, load_cache
+from utils.translator import translate, save_cache, load_cache, get_cache
 
 
 load_cache()
@@ -68,8 +69,12 @@ class ImageDataset(Dataset):
                 print(f"Error processing {img_file}: {str(e)}")
                 continue
 
-        print(
-            f"Filtered {len(self.filtered_files)} images from {len(self.image_files)} total images")
+        print(f"Filtered {len(self.filtered_files)} images from {len(self.image_files)} total images")
+
+        if not is_initialized() or get_rank() == 0:
+            print(f'[cache] saving {len(get_cache())} entries to cache.json')
+            save_cache()
+
 
     def __len__(self):
         return len(self.filtered_files)
@@ -84,13 +89,3 @@ class ImageDataset(Dataset):
         text = self.image_to_tags[img_name]
 
         return {"image": image, "text": text}
-
-
-try:
-    from torch.distributed import is_initialized, get_rank
-except ImportError:
-    def is_initialized(): return False
-    def get_rank(): return 0
-
-if not is_initialized() or get_rank() == 0:
-    save_cache()
