@@ -20,7 +20,7 @@ def cache_translation(func):
         if not text.strip():
             return text
         if key in cache:
-            return cache[text]
+            return cache[key]
 
         result = func(text, target_lang)
         cache[key] = result
