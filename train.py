@@ -1,68 +1,21 @@
-import torch
-import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from PIL import Image
 import os
-import clip
-from model import TextToImageModel
-from diffusers.optimization import get_scheduler
-from tqdm import tqdm
+
 import argparse
+from pathlib import Path 
+
+import torch
+from torch.utils.data import DataLoader
 from torch.nn.parallel import DataParallel
+from torch.utils.tensorboard import SummaryWriter
+from torchvision.utils import save_image
+from diffusers.optimization import get_scheduler
+
+from tqdm import tqdm
+from dataset import ImageDataset
+from model import TextToImageModel
 
 
-class WebImageDataset(Dataset):
-    def __init__(self, data_dir, min_clip_score=0.2, min_image_size=256):
-        self.data_dir = data_dir
-        self.image_files = [f for f in os.listdir(
-            data_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
-
-        self.clip_model, self.preprocess = clip.load("ViT-B/32", device="cpu")
-
-        self.filtered_files = []
-        for img_file in tqdm(self.image_files, desc="Filtering images"):
-            img_path = os.path.join(data_dir, img_file)
-            try:
-                image = Image.open(img_path).convert('RGB')
-                if min(image.size) < min_image_size:
-                    continue
-
-                text = os.path.splitext(img_file)[0].replace('_', ' ')
-                image_input = self.preprocess(image).unsqueeze(0)
-                text_input = clip.tokenize([text])
-
-                with torch.no_grad():
-                    image_features = self.clip_model.encode_image(image_input)
-                    text_features = self.clip_model.encode_text(text_input)
-                    similarity = torch.cosine_similarity(
-                        image_features, text_features)
-
-                if similarity.item() >= min_clip_score:
-                    self.filtered_files.append(img_file)
-
-            except Exception as e:
-                print(f"Error processing {img_file}: {str(e)}")
-                continue
-
-        print(
-            f"Filtered {len(self.filtered_files)} images from {len(self.image_files)} total images")
-
-    def __len__(self):
-        return len(self.filtered_files)
-
-    def __getitem__(self, idx):
-        img_name = self.filtered_files[idx]
-        img_path = os.path.join(self.data_dir, img_name)
-
-        image = Image.open(img_path).convert('RGB')
-        image = self.preprocess(image)
-
-        text = os.path.splitext(img_name)[0].replace('_', ' ')
-
-        return {"image": image, "text": text}
-
-
-def main():
+def train():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True, help="image dataset directory")
     parser.add_argument("--output_dir", type=str,
@@ -83,12 +36,12 @@ def main():
 
     model = TextToImageModel()
     if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs!")
+        print(f"Using {torch.cuda.device_count()} GPUs")
         model = DataParallel(model)
     model = model.to(device)
 
-    dataset = WebImageDataset(
-        args.data_dir,
+    dataset = ImageDataset(
+        Path(args.data_dir),
         min_clip_score=args.min_clip_score,
         min_image_size=args.min_image_size
     )
@@ -100,7 +53,7 @@ def main():
         pin_memory=True
     )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     lr_scheduler = get_scheduler(
         "linear",
         optimizer=optimizer,
@@ -108,6 +61,7 @@ def main():
         num_training_steps=len(dataloader) * args.epochs
     )
 
+    writer = SummaryWriter(log_dir=args.output_dir + "/logs")
     for epoch in range(args.epochs):
         model.train()
         progress_bar = tqdm(total=len(dataloader), desc=f"Epoch {epoch}")
@@ -116,14 +70,15 @@ def main():
             images = batch["image"].to(device, non_blocking=True)
             texts = batch["text"]
 
-            with torch.set_grad_enabled(True):
-                outputs = model(texts)
-                loss = nn.MSELoss()(outputs, images)
+            loss = model.module.train_step(images, texts, model.module.scheduler)
 
-                loss.backward()
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            lr_scheduler.step()
+
+            global_step = epoch * len(dataloader) + step
+            writer.add_scalar("train/loss", loss.item(), global_step)
 
             progress_bar.update(1)
             progress_bar.set_postfix({"loss": loss.item()})
@@ -134,7 +89,23 @@ def main():
         else:
             torch.save(model.state_dict(), save_path)
         print(f"model saved to {save_path}")
+    
+    validation_prompts = [
+        "BlueArchive",
+        "kasuga_tsubaki, blue_archive"
+    ]
+
+    model.eval()
+    with torch.no_grad():
+        for i, prompt in enumerate(validation_prompts):
+            if isinstance(model, DataParallel):
+                generated_image = model.module(prompt)  # (1, 3, 512, 512)
+            else:
+                generated_image = model(prompt)
+            save_path = os.path.join(args.output_dir, f"val_epoch_{epoch}_img_{i}.png")
+            save_image(generated_image, save_path)
 
 
 if __name__ == "__main__":
-    main()
+    train()
+

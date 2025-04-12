@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import CLIPTextModel, CLIPTokenizer
-from diffusers import AutoencoderKL, UNet2DConditionModel
-from diffusers.schedulers import DDIMScheduler
+from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler
 
 
 class TextToImageModel(nn.Module):
@@ -25,7 +24,7 @@ class TextToImageModel(nn.Module):
             "CompVis/stable-diffusion-v1-4", subfolder="unet").to(device).to(self.dtype)
 
         # Noise scheduler
-        self.scheduler = DDIMScheduler.from_pretrained(
+        self.scheduler = DDPMScheduler.from_pretrained(
             "CompVis/stable-diffusion-v1-4", subfolder="scheduler")
 
         # Freeze models
@@ -120,3 +119,30 @@ class TextToImageModel(nn.Module):
         image = self.decode_latents(latents)
 
         return image
+    
+    def train_step(self, image, text, noise_scheduler):
+        device = next(self.parameters()).device
+        dtype = self.dtype
+
+        # Encode image into latent
+        with torch.no_grad():
+            latent = self.vae.encode(image.to(device, dtype)).latent_dist.sample()
+            latent = latent * 0.18215
+
+        # Sample timestep t
+        bsz = latent.shape[0]
+        t = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=device).long()
+
+        # Add noise
+        noise = torch.randn_like(latent)
+        noisy_latent = noise_scheduler.add_noise(latent, noise, t)
+
+        # Text embedding
+        text_embed = self.encode_text(text)
+
+        # Predict noise
+        noise_pred = self.unet(noisy_latent, t, encoder_hidden_states=text_embed).sample
+
+        # Loss
+        loss = F.mse_loss(noise_pred, noise)
+        return loss
