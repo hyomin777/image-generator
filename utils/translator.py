@@ -22,7 +22,11 @@ def cache_translation(func):
         if key in cache:
             return cache[key]
 
-        result = func(text, target_lang)
+        try:
+            result = func(text, target_lang)
+        except Exception:
+            result = text
+
         cache[key] = result
         return result
     
@@ -44,8 +48,7 @@ def translate(text:str, target_lang='en') -> str:
 
     except Exception as e:
         print(f'lang detection/translation failed: {e} | text: {text}')
-        cache[text] = text
-        return text
+        raise
 
 
 def save_cache(path='cache.json'):

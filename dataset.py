@@ -86,4 +86,11 @@ class ImageDataset(Dataset):
         return {"image": image, "text": text}
 
 
-save_cache()
+try:
+    from torch.distributed import is_initialized, get_rank
+except ImportError:
+    def is_initialized(): return False
+    def get_rank(): return 0
+
+if not is_initialized() or get_rank() == 0:
+    save_cache()
