@@ -13,9 +13,6 @@ from PIL import Image
 from utils.translator import translate, save_cache, load_cache, get_cache
 
 
-load_cache()
-
-
 class ImageDataset(Dataset):
     def __init__(self, data_dir: Path, min_clip_score=0.2, min_image_size=256):
         self.data_dir = data_dir
@@ -27,6 +24,7 @@ class ImageDataset(Dataset):
         self.filtered_files = []
         self.image_to_tags = {}
 
+        load_cache()
         for img_file in tqdm(self.image_files, desc="Filtering images"):
             try:
                 img_path = data_dir / img_file

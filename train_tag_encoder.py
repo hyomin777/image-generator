@@ -29,6 +29,11 @@ def train_tag_encoder(rank, world_size, args):
 
     # tag encoder
     tag_encoder = TagEncoder().to(device)
+    resume_path = Path(args.output_dir) / 'tag_encoder.pt'
+
+    if resume_path.exists():
+        print(f'[rank: {rank}] Loading weights from {resume_path}')
+        tag_encoder.load_state_dict(torch.load(resume_path, map_location=device))
     tag_encoder = DDP(tag_encoder, device_ids=[rank], find_unused_parameters=True)
 
     optimizer = optim.AdamW(tag_encoder.parameters(), lr=args.lr)
@@ -49,7 +54,11 @@ def train_tag_encoder(rank, world_size, args):
     # train loop
     for epoch in range(args.epochs):
         sampler.set_epoch(epoch)
-        progress_bar = tqdm(dataloader, desc=f"[GPU {rank}] Epoch {epoch}", disable=(rank != 0))
+        progress_bar = tqdm(
+            dataloader,
+            desc=f"[GPU {rank}] Epoch {epoch}",
+            disable=(rank != 0)
+        )
 
         for batch in dataloader:
             images = batch["image"].to(device)
@@ -59,7 +68,6 @@ def train_tag_encoder(rank, world_size, args):
                 image_embeds = clip.get_image_features(pixel_values=images)
 
             tag_embeds = tag_encoder(tags)
-            print(f"[rank {rank}] tag_embeds shape: {tag_embeds.shape}")
             loss = cosine_contrastive_loss(tag_embeds, image_embeds)
 
             optimizer.zero_grad()
