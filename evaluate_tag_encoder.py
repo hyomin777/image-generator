@@ -1,0 +1,127 @@
+import torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from tag_encoder import TagEncoder
+from transformers import CLIPModel
+from dataset import ImageDataset
+from pathlib import Path
+
+
+def evaluate_similarity_matrix(tag_encoder, image_encoder, dataset, device, num_samples=32, save_path='output/similarity_matrix.png'):
+    tag_encoder.eval()
+    image_encoder.eval()
+
+    images, texts = [], []
+
+    for i in range(min(num_samples, len(dataset))):
+        sample = dataset[i]
+        images.append(sample['image'])
+        texts.append(sample['text'])
+
+    images = torch.stack(images).to(device)
+    with torch.no_grad():
+        image_embeds = image_encoder.get_image_features(pixel_values=images)
+        text_embeds = tag_encoder(texts)
+
+    image_embeds = F.normalize(image_embeds, dim=-1)
+    text_embeds = F.normalize(text_embeds, dim=-1)
+
+    similarity = text_embeds @ image_embeds.T
+
+    plt.figure(figsize=(8, 6))
+    plt.imshow(similarity.cpu().numpy(), cmap='viridis')
+    plt.colorbar(label='Cosine Similarity')
+    plt.title('Text ↔ Image Similarity Matrix')
+    plt.xlabel('Image Index')
+    plt.ylabel('Text Index')
+    plt.tight_layout()
+    plt.savefig(save_path)
+    print(f"[+] Similarity matrix saved to {save_path}")
+
+
+def retrieve_images_by_text(tag_encoder, image_encoder, dataset, text_query, device, top_k=5):
+    tag_encoder.eval()
+    image_encoder.eval()
+
+    all_images = torch.stack([sample['image'] for sample in dataset]).to(device)
+    with torch.no_grad():
+        image_embeds = image_encoder.get_image_features(pixel_values=all_images)
+        text_embed = tag_encoder([text_query]).to(device)
+
+    image_embeds = F.normalize(image_embeds, dim=-1)
+    text_embed = F.normalize(text_embed, dim=-1)
+
+    sims = (text_embed @ image_embeds.T).squeeze(0)  # (N,)
+    top_indices = sims.topk(top_k).indices.tolist()
+    print(f"[Query: '{text_query}'] Top {top_k} matching image indices: {top_indices}")
+    return top_indices  # image indices
+
+
+def retrieve_tags_by_image(tag_encoder, image_encoder, dataset, image_index, device, top_k=5):
+    tag_encoder.eval()
+    image_encoder.eval()
+
+    texts = [sample['text'] for sample in dataset]
+    with torch.no_grad():
+        image_embed = image_encoder.get_image_features(pixel_values=dataset[image_index]['image'].unsqueeze(0).to(device))
+        text_embeds = tag_encoder(texts)
+
+    image_embed = F.normalize(image_embed, dim=-1)
+    text_embeds = F.normalize(text_embeds, dim=-1)
+
+    sims = (image_embed @ text_embeds.T).squeeze(0)
+    top_indices = sims.topk(top_k).indices.tolist()
+    print(f"[Image {image_index}] Top {top_k} matching text tags:")
+    for i in top_indices:
+        print(f"  - {texts[i]}")
+    return [texts[i] for i in top_indices]
+
+
+def plot_positive_negative_distribution(tag_encoder, image_encoder, dataset, device, num_samples=128, save_path='output/pos_neg_hist.png'):
+    tag_encoder.eval()
+    image_encoder.eval()
+
+    pos_sims = []
+    neg_sims = []
+
+    for i in range(min(num_samples, len(dataset) - 1)):
+        img = dataset[i]['image'].unsqueeze(0).to(device)
+        text = dataset[i]['text']
+        neg_text = dataset[i + 1]['text']
+
+        with torch.no_grad():
+            img_embed = F.normalize(image_encoder.get_image_features(pixel_values=img), dim=-1)
+            text_embed = F.normalize(tag_encoder([text]), dim=-1)
+            neg_embed = F.normalize(tag_encoder([neg_text]), dim=-1)
+
+        pos_sims.append((img_embed @ text_embed.T).item())
+        neg_sims.append((img_embed @ neg_embed.T).item())
+
+    plt.hist(pos_sims, bins=20, alpha=0.6, label="Positive")
+    plt.hist(neg_sims, bins=20, alpha=0.6, label="Negative")
+    plt.xlabel("Cosine Similarity")
+    plt.ylabel("Frequency")
+    plt.legend()
+    plt.title("Positive vs Negative Similarity Distribution")
+    plt.tight_layout()
+    plt.savefig(save_path)
+    print(f'[+] Pos/Neg similarity histogram saved to {save_path}')
+
+
+if __name__ == '__main__':
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    tag_encoder = TagEncoder().to(device)
+    tag_encoder.load_state_dict(torch.load("output/tag_encoder.pt", map_location=device))
+    tag_encoder.eval()
+
+    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+    clip_model.eval()
+
+    dataset = ImageDataset(Path("/mnt/usb/image"))
+
+    evaluate_similarity_matrix(tag_encoder, clip_model, dataset, device)
+    plot_positive_negative_distribution(tag_encoder, clip_model, dataset, device)
+    retrieve_tags_by_image(tag_encoder, clip_model, dataset, image_index=0, device=device, top_k=5)

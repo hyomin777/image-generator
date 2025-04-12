@@ -80,6 +80,7 @@ def train_tag_encoder(rank, world_size, args):
         os.makedirs(args.output_dir, exist_ok=True)
         save_path = Path(args.output_dir) / 'tag_encoder.pt'
         torch.save(tag_encoder.module.state_dict(), save_path)
+        print(f'tag encoder saved to {save_path}')
 
     cleanup()
 
