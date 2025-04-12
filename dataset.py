@@ -9,6 +9,11 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from PIL import Image
 
+from translator import translate, save_cache, load_cache
+
+
+load_cache()
+
 
 class ImageDataset(Dataset):
     def __init__(self, data_dir: Path, min_clip_score=0.2, min_image_size=256):
@@ -28,7 +33,7 @@ class ImageDataset(Dataset):
 
                 if not metadata_path.exists():
                     continue
-                
+
                 image = Image.open(img_path).convert('RGB')
                 if min(image.size) < min_image_size:
                     continue
@@ -36,13 +41,16 @@ class ImageDataset(Dataset):
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
 
-                tags = metadata.get('tags', [])
-                if not tags:
+                raw_tags = metadata.get('tags', [])
+                raw_tags = list(set(raw_tags))
+
+                if not raw_tags:
                     continue
 
-                if len(tags) > 10:
-                    tags = tags[:10]
+                if len(raw_tags) > 10:
+                    raw_tags = raw_tags[:10]
 
+                tags = [translate(tag) for tag in raw_tags]
                 text = ' '.join(tags)
                 image_input = self.preprocess(image).unsqueeze(0)
                 text_input = clip.tokenize([text], truncate=True)
@@ -76,3 +84,6 @@ class ImageDataset(Dataset):
         text = self.image_to_tags[img_name]
 
         return {"image": image, "text": text}
+
+
+save_cache()

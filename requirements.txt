@@ -9,4 +9,5 @@ tqdm==4.67.1
 ftfy==6.3.1
 regex==2024.11.6
 clip==1.0
-
+langdetect==1.0.9
+deep-translator==1.11.4
