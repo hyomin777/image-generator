@@ -15,21 +15,16 @@ from dataset import ImageDataset
 from model import TextToImageModel
 
 
-def train():
+def train_model():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True, help="image dataset directory")
-    parser.add_argument("--output_dir", type=str,
-                        default="output", help="model save directory")
+    parser.add_argument("--output_dir", type=str, default="output", help="model save directory")
     parser.add_argument("--epochs", type=int, default=10, help="epochs for training")
     parser.add_argument("--batch_size", type=int, default=8, help="batch size")
-    parser.add_argument("--lr", type=float,
-                        default=1e-4, help="learning rate")
-    parser.add_argument("--min_clip_score", type=float,
-                        default=0.2, help="minimum clip score")
-    parser.add_argument("--min_image_size", type=int,
-                        default=256, help="minimum image size")
-    parser.add_argument("--num_workers", type=int,
-                        default=4, help="data loader worker count")
+    parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
+    parser.add_argument("--min_clip_score", type=float, default=0.2, help="minimum clip score")
+    parser.add_argument("--min_image_size", type=int, default=256, help="minimum image size")
+    parser.add_argument("--num_workers", type=int, default=4, help="data loader worker count")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -107,5 +102,5 @@ def train():
 
 
 if __name__ == "__main__":
-    train()
+    train_model()
 
