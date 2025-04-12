@@ -9,7 +9,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from PIL import Image
 
-from translator import translate, save_cache, load_cache
+from utils.translator import translate, save_cache, load_cache
 
 
 load_cache()

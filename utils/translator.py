@@ -19,15 +19,13 @@ def cache_translation(func):
 
         if not text.strip():
             return text
-
         if key in cache:
             return cache[text]
 
         result = func(text, target_lang)
         cache[key] = result
-
         return result
-
+    
     return wrapper
 
 
@@ -53,6 +51,7 @@ def translate(text:str, target_lang='en') -> str:
 def save_cache(path='cache.json'):
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
+    print(f'[cache] saved {len(cache)} entries to {path}')
 
 
 def load_cache(path='cache.json'):
