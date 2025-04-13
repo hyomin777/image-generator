@@ -17,6 +17,7 @@ from dataset import ImageDataset
 from tag_encoder import TagEncoder
 from loss import cosine_contrastive_loss
 from utils.ddp import setup, cleanup
+from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
 
 
 def train_tag_encoder(rank, world_size, args):
@@ -61,6 +62,10 @@ def train_tag_encoder(rank, world_size, args):
         )
 
         for batch in dataloader:
+            temp = get_gpu_temp(rank)
+            if temp >= 80:
+                wait_for_cooldown(rank)
+
             images = batch["image"].to(device)
             tags = batch["text"]
 
@@ -89,7 +94,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True, help="image dataset directory")
     parser.add_argument("--output_dir", type=str, default="output", help="model save directory")
-    parser.add_argument("--epochs", type=int, default=10, help="epochs for training")
+    parser.add_argument("--epochs", type=int, default=100, help="epochs for training")
     parser.add_argument("--batch_size", type=int, default=8, help="batch size")
     parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
     parser.add_argument("--num_workers", type=int, default=4, help="data loader worker count")
