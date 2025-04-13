@@ -1,4 +1,7 @@
 import os
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
+
 import json
 from pathlib import Path
 from utils.translator import translate, load_cache, save_cache
