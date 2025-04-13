@@ -32,9 +32,8 @@ def cache_translation(func):
             result = text
 
         cache[key] = result
-        print(f'[cache][add] {key} -> {result}')
         return result
-    
+
     return wrapper
 
 
