@@ -116,18 +116,17 @@ def train_tag_encoder(rank, world_size, args):
             total_loss += loss.item()
             progress_bar.set_postfix({"loss": loss.item()})
 
-    avg_loss = total_loss / len(dataloader)
-    if rank == 0 and avg_loss < best_loss:
-        os.makedirs(args.output_dir, exist_ok=True)
+        avg_loss = total_loss / len(dataloader)
+        if rank == 0 and avg_loss < best_loss:
+            best_loss = avg_loss
+            os.makedirs(args.output_dir, exist_ok=True)
 
-        tag_encoder_path = Path(args.output_dir) / 'tag_encoder.pt'
-        torch.save(tag_encoder.module.state_dict(), tag_encoder_path)
-        print(f'[Epoch {epoch}] tag encoder saved to {tag_encoder_path}', flush=True)
+            tag_encoder_path = Path(args.output_dir) / 'tag_encoder.pt'
+            torch.save(tag_encoder.module.state_dict(), tag_encoder_path)
 
-        image_encoder_path = Path(args.output_dir) / 'image_encoder.pt'
-        torch.save(clip.module.state_dict(), image_encoder_path)
-        print(f'[Epoch {epoch}] image encoder saved to {image_encoder_path}', flush=True)
-
+            image_encoder_path = Path(args.output_dir) / 'image_encoder.pt'
+            torch.save(clip.module.state_dict(), image_encoder_path)
+            print(f'[Epoch {epoch}] encoder saved with loss {avg_loss:.4f}', flush=True)
 
     cleanup()
 
