@@ -4,15 +4,62 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 
 import json
-from pathlib import Path
 import argparse
+from pathlib import Path
+from collections import Counter
 from utils.translator import translate, load_cache, save_cache
 
 
-def generate_tags_file(data_dir: str, output_path: str = "tags.txt", max_tags=10):
-    metadata_dir = Path(data_dir) / "metadata"
-    image_files = [f for f in os.listdir(data_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+def is_only_symbols(tag: str) -> bool:
+    filtered = "".join(ch for ch in tag if ch.isalnum())
+    return len(filtered.strip()) == 0
 
+
+def collect_tag_frequencies(data_dir: str, out_json="tag_freq.json"):
+    metadata_dir = Path(data_dir) / "metadata"
+    image_files = [
+        f for f in os.listdir(data_dir)
+        if f.lower().endswith(('.png', '.jpg', '.jpeg'))
+    ]
+
+    tag_counter = Counter()
+    for img_file in image_files:
+        meta_path = metadata_dir / (Path(img_file).stem + '.json')
+        if not meta_path.exists():
+            continue
+
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+
+            raw_tags = metadata.get('tags', [])
+            for tag in raw_tags:
+                tag = tag.strip().lower()
+                if tag:
+                    tag_counter[tag] += 1
+
+        except Exception as e:
+            print(f"Error reading {img_file}: {e}")
+
+    with open(out_json, 'w', encoding='utf-8') as f:
+        json.dump(dict(tag_counter), f, ensure_ascii=False, indent=2)
+    print(f"[DONE] Collected frequencies of {len(tag_counter)} tags → {out_json}")
+
+
+def generate_tags_file(
+    data_dir: str,
+    freq_json: str = "tag_freq.json",
+    output_path: str = "tags.txt",
+    min_freq: int = 10,
+):
+    with open(freq_json, 'r', encoding='utf-8') as f:
+        tag_freq_dict = json.load(f)
+
+    image_files = [
+        f for f in os.listdir(data_dir)
+        if f.lower().endswith(('.png', '.jpg', 'jpeg'))
+    ]
+    metadata_dir = Path(data_dir) / "metadata"
     seen_lines = set()
     count = 0
 
@@ -28,15 +75,28 @@ def generate_tags_file(data_dir: str, output_path: str = "tags.txt", max_tags=10
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
 
-                raw_tags = list(set(metadata.get('tags', [])))[:max_tags]
+                raw_tags = list(set(metadata.get('tags', [])))
                 if not raw_tags:
                     continue
 
-                translated_tags = [translate(tag, target_lang='en') for tag in raw_tags]
-                translated_tags = list(dict.fromkeys(translated_tags))
+                cleaned_tags = []
+                for tag in raw_tags:
+                    tag = tag.strip().lower()
+                    if not tag or is_only_symbols(tag):
+                        continue
 
-                line = ' '.join(translated_tags).strip()
-                if line and line not in seen_lines:
+                    freq = tag_freq_dict.get(tag, 0)
+                    if freq < min_freq:
+                        continue
+
+                    cleaned_tags.append(translate(tag))
+
+                cleaned_tags = list(dict.fromkeys(cleaned_tags))
+                if not cleaned_tags:
+                    continue
+
+                line = ' '.join(cleaned_tags)
+                if line not in seen_lines:
                     fout.write(line + '\n')
                     seen_lines.add(line)
                     count += 1
@@ -53,7 +113,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True, help="Dataset root directory (with images and metadata/)")
     parser.add_argument("--output_path", type=str, default="tags.txt", help="Where to save the tag text file")
-    parser.add_argument("--max_tags", type=int, default=10, help="Maximum tags per image")
+    parser.add_argument("--freq_json", type=str, default="tag_freq.json", help="Where to save/load tag frequency data")
     args = parser.parse_args()
 
-    generate_tags_file(args.data_dir, args.output_path, args.max_tags)
+    collect_tag_frequencies(args.data_dir)
+    generate_tags_file(args.data_dir, args.freq_json, args.output_path)

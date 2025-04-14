@@ -32,7 +32,7 @@ def train_tokenizer(data_file, vocab_size=8192, output_dir="tokenizer"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_file", type=str, required=True, help="Path to tags.txt file")
-    parser.add_argument("--vocab_size", type=int, default=8192, help="Vocabulary size")
+    parser.add_argument("--vocab_size", type=int, default=16384, help="Vocabulary size")
     parser.add_argument("--output_dir", type=str, default="tokenizer", help="Output directory")
     args = parser.parse_args()
 

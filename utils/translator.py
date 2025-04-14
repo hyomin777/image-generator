@@ -1,3 +1,4 @@
+import re
 import json
 from functools import wraps
 from langdetect import detect
@@ -39,6 +40,9 @@ def cache_translation(func):
 
 @cache_translation
 def translate(text:str, target_lang='en') -> str:
+    if re.match(r'^[a-zA-Z0-9_]+$', text) and len(text) < 30:
+        return text
+
     try:
         lang = detect(text)
         lang = LANG_MAP.get(lang, lang)

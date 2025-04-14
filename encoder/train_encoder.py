@@ -21,6 +21,7 @@ from tag_encoder import TagEncoder
 from loss import cosine_contrastive_loss
 from utils.ddp import setup, cleanup
 from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
+from utils.collate_fn import skip_broken_collate_fn
 
 
 def train_tag_encoder(rank, world_size, args):
@@ -76,7 +77,8 @@ def train_tag_encoder(rank, world_size, args):
         sampler=sampler,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        pin_memory=True
+        pin_memory=True,
+        collate_fn=skip_broken_collate_fn
     )
 
     # train loop
@@ -91,6 +93,8 @@ def train_tag_encoder(rank, world_size, args):
         )
 
         for batch in dataloader:
+            if batch is None:
+                continue
             temp = get_gpu_temp(rank)
             if temp >= 80:
                 wait_for_cooldown(rank)

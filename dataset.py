@@ -58,9 +58,13 @@ class ImageDataset(Dataset):
         img_name = self.filtered_files[idx]
         img_path = self.data_dir / img_name
 
-        image = Image.open(img_path).convert('RGB')
-        image = self.transform(image)
+        try:
+            image = Image.open(img_path).convert('RGB')
+        except Exception as e:
+            print(f"[WARNING] Failed to load {img_name}: {e}")
+            return None
 
+        image = self.transform(image)
         text = self.image_to_tags[img_name]
 
         return {"image": image, "text": text}
