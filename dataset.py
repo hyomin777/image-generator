@@ -38,12 +38,11 @@ class ImageDataset(Dataset):
                 if not raw_tags:
                     continue
 
-                # use cached translation
-                tags = [cache.get(f"{tag}|en", tag) for tag in raw_tags]
-                text = ' '.join(tags)
+                raw_text = ' '.join(raw_tags)
+                trainlated_text = ' '.join([cache.get(f"{tag}|en", tag) for tag in raw_tags])
 
                 self.filtered_files.append(img_file)
-                self.image_to_tags[img_file] = text
+                self.image_to_tags[img_file] = {'raw_text': raw_text, 'translated_text', translated_text}
 
             except Exception as e:
                 print(f"Error processing {img_file}: {str(e)}")
@@ -65,7 +64,7 @@ class ImageDataset(Dataset):
             return None
 
         image = self.transform(image)
-        text = self.image_to_tags[img_name]
+        texts = self.image_to_tags[img_name]
 
-        return {"image": image, "text": text}
+        return {"image": image, "raw_text": texts['raw_text'], 'translated_text': texts['translated_text']}
 

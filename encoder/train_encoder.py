@@ -100,18 +100,32 @@ def train_tag_encoder(rank, world_size, args):
                 wait_for_cooldown(rank)
 
             images = batch["image"].to(device)
-            tags = batch["text"]
+            raw_texts = batch["raw_text"]
+            translated_texts = batch['translated_text']
 
             # tokenize
-            tokenized = tokenizer(tags, padding=True, truncation=True, max_length=32, return_tensors='pt')
-            input_ids = tokenized.input_ids.to(device)
-            attention_mask = tokenized.attention_mask.to(device)
+            tokenized_raw = tokenizer(raw_texts, padding=True, truncation=True, max_length=32, return_tensors='pt')
+            tokenized_translated = tokenizer(translated_texts, padding=True, truncation=True, max_length=32, return_tensors='pt')
+
+            input_ids_raw = tokenized_raw.input_ids.to(device)
+            attention_mask_raw = tokenized_raw.attention_mask.to(device)
+
+            input_ids_translated = tokenized_translated.input_ids.to(device)
+            attention_mask_translated = tokenized_translated.attention_mask.to(device)
 
             with torch.no_grad():
                 image_embeds = clip.module.get_image_features(pixel_values=images)
 
-            tag_embeds = tag_encoder(input_ids=input_ids, attention_mask=attention_mask)
-            loss = cosine_contrastive_loss(tag_embeds, image_embeds)
+            # get embeddings
+            raw_text_embeds = tag_encoder(input_ids=input_ids_raw, attention_mask=attention_mask_raw)
+            translated_text_embeds = tag_encoder(input_ids=input_ids_translated, attention_mask=attention_mask_translated)
+
+            # compute contrastive loss
+            loss_image_raw = cosine_contrastive_loss(raw_text_embeds, image_embeds)
+            loss_image_translated = cosine_contrastive_loss(translated_text_embeds, image_embeds)
+            loss_raw_translated = cosine_contrastive_loss(raw_text_embeds, translated_text_embeds)
+
+            loss = (loss_image_raw + loss_image_translated + loss_raw_translated) / 3
 
             optimizer.zero_grad()
             loss.backward()

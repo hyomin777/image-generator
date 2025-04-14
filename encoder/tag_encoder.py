@@ -4,7 +4,7 @@ from transformers import AutoTokenizer, AutoModel
 
 
 class TagEncoder(nn.Module):
-    def __init__(self, vocab_size, embed_dim=256, num_layers=4, projection_dim=512):
+    def __init__(self, vocab_size=16384, embed_dim=256, num_layers=4, projection_dim=512):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=4, batch_first=True)
