@@ -46,8 +46,6 @@ def cache_translation(func):
 
 @cache_translation
 def translate(text:str, target_lang='en') -> str:
-    text = preprocess_text(text)
-
     if not re.search(r'[\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7A3]', text):
         return text
 

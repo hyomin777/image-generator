@@ -7,7 +7,7 @@ import json
 import argparse
 from pathlib import Path
 from collections import Counter
-from utils.translator import translate, load_cache, save_cache, preprocess_text
+from utils.translator import translate, load_cache, save_cache
 
 
 def collect_tag_frequencies(data_dir: str, out_json="tag_freq.json"):
@@ -70,14 +70,17 @@ def generate_tags_file(
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
 
-                raw_title = preprocess_text(metadata.get('title', ''))
+                raw_title = metadata.get('title', '')
                 raw_tags = list(set(metadata.get('tags', [])))
                 if not raw_title and not raw_tags:
                     continue
 
                 cleaned_tags = []
+                if raw_title:
+                    cleaned_tags.append(raw_title)
+                    cleaned_tags.append(translate(raw_title))
+
                 for tag in raw_tags:
-                    tag = preprocess_text(tag)
                     if not tag:
                         continue
 
