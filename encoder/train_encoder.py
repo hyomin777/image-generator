@@ -125,7 +125,7 @@ def train_tag_encoder(rank, world_size, args):
             loss_image_translated = cosine_contrastive_loss(translated_text_embeds, image_embeds)
             loss_raw_translated = cosine_contrastive_loss(raw_text_embeds, translated_text_embeds)
 
-            loss = (loss_image_raw + loss_image_translated + loss_raw_translated) / 3
+            loss = ((loss_image_raw + loss_image_translated) / 2) + loss_raw_translated
 
             optimizer.zero_grad()
             loss.backward()

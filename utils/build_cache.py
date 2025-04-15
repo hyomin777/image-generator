@@ -7,7 +7,7 @@ from pathlib import Path
 from utils.translator import translate, load_cache, save_cache
 
 
-def build_translation_cache(data_dir: Path, max_tags=10):
+def build_translation_cache(data_dir: Path):
     metadata_dir = data_dir / "metadata"
     filenames = [f for f in os.listdir(data_dir) if f.endswith((".jpg", ".jpeg", ".png"))]
 
@@ -24,15 +24,19 @@ def build_translation_cache(data_dir: Path, max_tags=10):
         with open(metadata_path, "r", encoding="utf-8") as f:
             metadata = json.load(f)
 
-        raw_tags = list(set(metadata.get("tags", [])))[:max_tags]
-        if not raw_tags:
+        raw_title = metadata.get('title', '')
+        raw_tags = list(set(metadata.get("tags", [])))
+        if not raw_title and not raw_tags:
             continue
+        if raw_title:
+            raw_tags.append(raw_title)
 
         # translate each tag and store in cache
         _ = [translate(tag) for tag in raw_tags]
 
-        if (i + 1) % 100 == 0:
-            print(f"[build_cache] Processed {i+1}/{total} images")
+        if (i + 1) % 1000 == 0:
+            save_cache()
+            print(f"/n/n[build_cache] Processed {i+1}/{total} images/n/n")
 
     save_cache()
     print("[build_cache] Cache build complete.")

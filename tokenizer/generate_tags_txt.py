@@ -7,12 +7,7 @@ import json
 import argparse
 from pathlib import Path
 from collections import Counter
-from utils.translator import translate, load_cache, save_cache
-
-
-def is_only_symbols(tag: str) -> bool:
-    filtered = "".join(ch for ch in tag if ch.isalnum())
-    return len(filtered.strip()) == 0
+from utils.translator import translate, load_cache, save_cache, preprocess_text
 
 
 def collect_tag_frequencies(data_dir: str, out_json="tag_freq.json"):
@@ -50,7 +45,7 @@ def generate_tags_file(
     data_dir: str,
     freq_json: str = "tag_freq.json",
     output_path: str = "tags.txt",
-    min_freq: int = 10,
+    min_freq: int = 5,
 ):
     with open(freq_json, 'r', encoding='utf-8') as f:
         tag_freq_dict = json.load(f)
@@ -75,20 +70,22 @@ def generate_tags_file(
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
 
+                raw_title = preprocess_text(metadata.get('title', ''))
                 raw_tags = list(set(metadata.get('tags', [])))
-                if not raw_tags:
+                if not raw_title and not raw_tags:
                     continue
 
                 cleaned_tags = []
                 for tag in raw_tags:
-                    tag = tag.strip().lower()
-                    if not tag or is_only_symbols(tag):
+                    tag = preprocess_text(tag)
+                    if not tag:
                         continue
 
                     freq = tag_freq_dict.get(tag, 0)
                     if freq < min_freq:
                         continue
 
+                    cleaned_tags.append(tag)
                     cleaned_tags.append(translate(tag))
 
                 cleaned_tags = list(dict.fromkeys(cleaned_tags))

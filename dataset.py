@@ -4,7 +4,7 @@ from pathlib import Path
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
-from utils.translator import load_cache, get_cache
+from utils.translator import load_cache, get_cache, translate
 
 
 class ImageDataset(Dataset):
@@ -34,15 +34,22 @@ class ImageDataset(Dataset):
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
 
+                raw_title = metadata.get('title', '')
                 raw_tags = list(set(metadata.get('tags', [])))[:max_tags]
-                if not raw_tags:
+                if not raw_title and not raw_tags:
                     continue
 
-                raw_text = ' '.join(raw_tags)
-                trainlated_text = ' '.join([cache.get(f"{tag}|en", tag) for tag in raw_tags])
+                if raw_title:
+                    raw_text = raw_title + ' ' + ' '.join(raw_tags)
+                else:
+                    raw_text = ' '.join(raw_tags)
+
+                translated_title = translate(raw_title)
+                translated_tags = [translate(tag) for tag in raw_tags]
+                translated_text = (translated_title + ' ' if translated_title else '') + ' '.join(translated_tags)
 
                 self.filtered_files.append(img_file)
-                self.image_to_tags[img_file] = {'raw_text': raw_text, 'translated_text', translated_text}
+                self.image_to_tags[img_file] = {'raw_text': raw_text, 'translated_text': translated_text}
 
             except Exception as e:
                 print(f"Error processing {img_file}: {str(e)}")
