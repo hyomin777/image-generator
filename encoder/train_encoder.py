@@ -17,7 +17,7 @@ from transformers import CLIPModel, PreTrainedTokenizerFast
 
 from tqdm import tqdm
 from dataset import ImageDataset
-from tag_encoder import TagEncoder
+from tag_encoder import TagEncoder, LoRALinear
 from loss import cosine_contrastive_loss
 from utils.ddp import setup, cleanup
 from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
@@ -36,7 +36,7 @@ def train_tag_encoder(rank, world_size, args):
 
     # image encoder
     clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-    clip.train()
+    clip.eval()
 
     image_resume_path = Path(args.output_dir) / 'image_encoder.pt'
     if image_resume_path.exists():
@@ -46,9 +46,14 @@ def train_tag_encoder(rank, world_size, args):
     for param in clip.parameters():
         param.requires_grad = False
 
-    for param in clip.vision_model.encoder.layers[-2:].parameters():
-        param.requires_grad = True
+    for i in [-2, -1]:
+        block = clip.vision_model.encoder.layers[i]
 
+        sa = block.self_attn
+        sa.q_proj = LoRALinear(sa.q_proj, r=4, alpha=1.0).to(device)
+        sa.v_proj = LoRALinear(sa.v_proj, r=4, alpha=1.0).to(device)
+
+    clip.train()
     clip = DDP(clip, device_ids=[rank], find_unused_parameters=False)
 
     # tag encoder
