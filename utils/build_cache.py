@@ -4,7 +4,7 @@ sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 
 import json
 from pathlib import Path
-from utils.translator import translate, load_cache, save_cache
+from utils.translator import translate, load_cache, save_cache, preprocess_text
 
 
 def build_translation_cache(data_dir: Path):
@@ -32,7 +32,7 @@ def build_translation_cache(data_dir: Path):
             raw_tags.append(raw_title)
 
         # translate each tag and store in cache
-        _ = [translate(tag) for tag in raw_tags]
+        _ = [translate(preprocess_text(tag)) for tag in raw_tags]
 
         if (i + 1) % 1000 == 0:
             save_cache()

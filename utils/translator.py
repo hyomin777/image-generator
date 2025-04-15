@@ -25,6 +25,7 @@ def get_cache():
 def cache_translation(func):
     @wraps(func)
     def wrapper(text:str, target_lang='en'):
+        text = preprocess_text(text)
         key = f'{text}|{target_lang}'
 
         if not text.strip():
