@@ -13,6 +13,11 @@ LANG_MAP = {
 }
 
 
+def preprocess_text(text):
+    text = text.strip().lower()
+    return re.sub(r'[^\u3131-\u3163\uac00-\ud7a3\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFFa-z0-9\s]', '', text)
+
+
 def get_cache():
     return cache
 
@@ -40,7 +45,9 @@ def cache_translation(func):
 
 @cache_translation
 def translate(text:str, target_lang='en') -> str:
-    if re.match(r'^[a-zA-Z0-9_]+$', text) and len(text) < 30:
+    text = preprocess_text(text)
+
+    if not re.search(r'[\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7A3]', text):
         return text
 
     try:
@@ -51,7 +58,10 @@ def translate(text:str, target_lang='en') -> str:
             return text
 
         translated = GoogleTranslator(source=lang, target=target_lang).translate(text)
-        print(f"[translate] translating '{text}' to '{translated}'")
+        if re.search(r'[\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7A3]', translated):
+             return text
+
+        print(f"[translate] '{text}' to '{translated}'")
         return translated
 
     except Exception as e:
