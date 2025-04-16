@@ -38,11 +38,6 @@ def train_tag_encoder(rank, world_size, args):
     clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
     clip.eval()
 
-    image_resume_path = Path(args.output_dir) / 'image_encoder.pt'
-    if image_resume_path.exists():
-        print(f'[rank: {rank}] Loading weights from {image_resume_path}', flush=True)
-        clip.load_state_dict(torch.load(image_resume_path, map_location=device))
-
     for param in clip.parameters():
         param.requires_grad = False
 
@@ -52,6 +47,11 @@ def train_tag_encoder(rank, world_size, args):
         sa = block.self_attn
         sa.q_proj = LoRALinear(sa.q_proj, r=4, alpha=1.0).to(device)
         sa.v_proj = LoRALinear(sa.v_proj, r=4, alpha=1.0).to(device)
+
+    image_resume_path = Path(args.output_dir) / 'image_encoder.pt'
+    if image_resume_path.exists():
+        print(f'[rank: {rank}] Loading weights from {image_resume_path}', flush=True)
+        clip.load_state_dict(torch.load(image_resume_path, map_location=device))
 
     clip.train()
     clip = DDP(clip, device_ids=[rank], find_unused_parameters=False)

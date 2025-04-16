@@ -8,17 +8,27 @@ from utils.translator import load_cache, get_cache, translate
 
 
 class ImageDataset(Dataset):
-    def __init__(self, data_dir: Path, max_tags=10):
+    def __init__(self, data_dir: Path, max_tags=10, is_train=True):
         self.data_dir = data_dir
         self.metadata_dir = data_dir / 'metadata'
         self.image_files = [f for f in os.listdir(data_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
         self.filtered_files = []
         self.image_to_tags = {}
 
-        self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor()
-        ])
+        if is_train:
+            self.transform = transforms.Compose([
+                transforms.Resize((256, 256)),
+                transforms.RandomCrop((224, 224)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
+                transforms.RandomRotation(10),
+                transforms.ToTensor()
+            ])
+        else:
+            self.transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor()
+            ])
 
         load_cache()
         cache = get_cache()
