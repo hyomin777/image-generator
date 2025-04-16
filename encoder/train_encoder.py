@@ -17,7 +17,8 @@ from transformers import CLIPModel, PreTrainedTokenizerFast
 
 from tqdm import tqdm
 from dataset import ImageDataset
-from tag_encoder import TagEncoder, LoRALinear
+from tag_encoder import TagEncoder
+from lora import LoRALinear, extract_lora_weights, load_lora_weights
 from loss import cosine_contrastive_loss
 from utils.ddp import setup, cleanup
 from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
@@ -51,7 +52,8 @@ def train_tag_encoder(rank, world_size, args):
     image_resume_path = Path(args.output_dir) / 'image_encoder.pt'
     if image_resume_path.exists():
         print(f'[rank: {rank}] Loading weights from {image_resume_path}', flush=True)
-        clip.load_state_dict(torch.load(image_resume_path, map_location=device))
+        lora_weights = torch.load(image_resume_path, map_location=device)
+        load_lora_weights(clip, lora_weights)
 
     clip.train()
     clip = DDP(clip, device_ids=[rank], find_unused_parameters=False)
