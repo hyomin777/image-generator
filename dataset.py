@@ -4,15 +4,15 @@ from pathlib import Path
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
-from utils.translator import load_cache, get_cache, translate
+from utils.translator import load_cache, translate
 
 
-class ImageDataset(Dataset):
-    def __init__(self, data_dir: Path, max_tags=10, is_train=True):
+class BaseImageDataset(Dataset):
+    def __init__(self, data_dir: Path, is_train=True):
         self.data_dir = data_dir
         self.metadata_dir = data_dir / 'metadata'
         self.image_files = [f for f in os.listdir(data_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
-        self.filtered_files = []
+        self.image_paths = []
         self.image_to_tags = {}
 
         if is_train:
@@ -30,12 +30,67 @@ class ImageDataset(Dataset):
                 transforms.ToTensor()
             ])
 
-        load_cache()
-        cache = get_cache()
+        self._map_tag_to_image()
 
+    def _map_tag_to_image(self):
+        raise NotImplementedError("Subclasses must implement _map_tag_to_image")
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_name = self.image_paths[idx]
+        img_path = self.data_dir / img_name
+
+        try:
+            image = Image.open(img_path).convert('RGB')
+        except Exception as e:
+            print(f"[WARNING] Failed to load {img_name}: {e}")
+            return None
+
+        image = self.transform(image)
+        text = self.image_to_tags[img_name]
+        return {"image": image, "text": text}
+
+
+class RefinedImageDataset(BaseImageDataset):
+    def __init__(self, data_dir, is_train=True):
+        super().__init__(data_dir, is_train)
+
+    def map_tag_to_image(self):
         for img_file in self.image_files:
             try:
-                img_path = data_dir / img_file
+                metadata_path = self.metadata_dir / (Path(img_file).stem + '.json')
+
+                if not metadata_path.exists():
+                    continue
+
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+
+                raw_tags = list(set(metadata.get('tags', [])))
+                if not raw_tags:
+                    continue
+
+                raw_text = ' '.join(raw_tags)
+                self.image_paths.append(img_file)
+                self.image_to_tags[img_file] = {'raw_text': raw_text}
+
+            except Exception as e:
+                print(f"Error processing {img_file}: {str(e)}")
+                continue
+
+        print(f"Filtered {len(self.image_paths)} images from {len(self.image_files)} total images")
+
+
+class ImageDataset(BaseImageDataset):
+    def __init__(self, data_dir: Path,is_train=True):
+        super().__init__(data_dir, is_train)
+        load_cache()
+
+    def _map_tag_to_image(self):
+        for img_file in self.image_files:
+            try:
                 metadata_path = self.metadata_dir / (Path(img_file).stem + '.json')
 
                 if not metadata_path.exists():
@@ -45,7 +100,7 @@ class ImageDataset(Dataset):
                     metadata = json.load(f)
 
                 raw_title = metadata.get('title', '')
-                raw_tags = list(set(metadata.get('tags', [])))[:max_tags]
+                raw_tags = list(set(metadata.get('tags', [])))
                 if not raw_title and not raw_tags:
                     continue
 
@@ -58,30 +113,11 @@ class ImageDataset(Dataset):
                 translated_tags = [translate(tag) for tag in raw_tags]
                 translated_text = (translated_title + ' ' if translated_title else '') + ' '.join(translated_tags)
 
-                self.filtered_files.append(img_file)
+                self.image_paths.append(img_file)
                 self.image_to_tags[img_file] = {'raw_text': raw_text, 'translated_text': translated_text}
 
             except Exception as e:
                 print(f"Error processing {img_file}: {str(e)}")
                 continue
 
-        print(f"Filtered {len(self.filtered_files)} images from {len(self.image_files)} total images")
-
-    def __len__(self):
-        return len(self.filtered_files)
-
-    def __getitem__(self, idx):
-        img_name = self.filtered_files[idx]
-        img_path = self.data_dir / img_name
-
-        try:
-            image = Image.open(img_path).convert('RGB')
-        except Exception as e:
-            print(f"[WARNING] Failed to load {img_name}: {e}")
-            return None
-
-        image = self.transform(image)
-        texts = self.image_to_tags[img_name]
-
-        return {"image": image, "raw_text": texts['raw_text'], 'translated_text': texts['translated_text']}
-
+        print(f"Filtered {len(self.image_paths)} images from {len(self.image_files)} total images")
