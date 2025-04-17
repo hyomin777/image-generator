@@ -57,7 +57,7 @@ class RefinedImageDataset(BaseImageDataset):
     def __init__(self, data_dir, is_train=True):
         super().__init__(data_dir, is_train)
 
-    def map_tag_to_image(self):
+    def _map_tag_to_image(self):
         for img_file in self.image_files:
             try:
                 metadata_path = self.metadata_dir / (Path(img_file).stem + '.json')
