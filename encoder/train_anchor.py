@@ -8,7 +8,6 @@ from pathlib import Path
 
 import torch
 import torch.optim as optim
-import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
@@ -23,6 +22,44 @@ from loss import cosine_contrastive_loss
 from utils.ddp import setup, cleanup
 from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
 from utils.collate_fn import skip_broken_collate_fn
+
+
+def save_checkpoint(epoch, text_encoder, image_encoder, optimizer, best_loss, output_dir:Path):
+    checkpoint = {
+        'epoch': epoch,
+        'text_encoder_state_dict': text_encoder.state_dict(),
+        'image_encoder_state_dict': image_encoder.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'best_loss': best_loss
+    }
+    checkpoint_dir = output_dir / 'checkpoints'
+    checkpoint_dir.mkdir(exist_ok=True)
+    checkpoint_path = checkpoint_dir / f'checkpoint.pth'
+    torch.save(checkpoint, checkpoint_path)
+    print(f'Checkpoint saved at epoch {epoch}')
+
+
+def load_checkpoint(text_encoder, image_encoder, optimizer, output_dir:Path):
+    checkpoint_path = output_dir / 'checkpoints/checkpoint.pth'
+
+    if checkpoint_path.exists():
+        checkpoint = torch.load(checkpoint_path)
+        text_encoder.load_state_dict(checkpoint['text_encoder_state_dict'])
+        image_encoder.load_state_dict(checkpoint['image_encoder_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        best_loss = checkpoint['best_loss']
+        print(f'Checkpoint loaded from epoch {checkpoint["epoch"]}')
+        return start_epoch, best_loss
+    return 1, 0.0
+
+
+def save_weights(model, loss, save_name, output_dir:Path):
+    output_dir = output_dir / 'weights'
+    output_dir.mkdir(exist_ok=True)
+    weigths_path = output_dir / f'{save_name}.pth'
+    torch.save(model.state_dict(), weigths_path)
+    print(f'Model saved with accuracy: {loss:.2f}%')
 
 
 def train_anchor(rank, world_size, args):
@@ -56,29 +93,19 @@ def train_anchor(rank, world_size, args):
         sa.q_proj = LoRALinear(sa.q_proj, r=4, alpha=1.0).to(device)
         sa.v_proj = LoRALinear(sa.v_proj, r=4, alpha=1.0).to(device)
 
-    image_resume_path = Path(args.output_dir) / 'image_encoder.pt'
-    if image_resume_path.exists():
-        print(f'[rank: {rank}] Loading weights from {image_resume_path}', flush=True)
-        clip.load_state_dict(torch.load(image_resume_path, map_location=device))
-
-    clip.train()
-    clip = DDP(clip, device_ids=[rank], find_unused_parameters=False)
-
     # tag encoder
     vocab_size = tokenizer.vocab_size
     tag_encoder = TagEncoder(vocab_size=vocab_size).to(device)
-    tag_resume_path = Path(args.output_dir) / 'tag_encoder.pt'
-
-    if tag_resume_path.exists():
-        print(f'[rank: {rank}] Loading weights from {tag_resume_path}', flush=True)
-        tag_encoder.load_state_dict(torch.load(tag_resume_path, map_location=device))
-
-    tag_encoder = DDP(tag_encoder, device_ids=[rank], find_unused_parameters=False)
 
     # optimizer
     params_to_optimize = list(tag_encoder.parameters()) + list(p for p in clip.parameters() if p.requires_grad)
     optimizer = optim.AdamW(params_to_optimize, lr=args.lr)
 
+    # resume
+    start_epoch = 1
+    best_loss = float('inf')
+    if args.resume:
+        start_epoch, best_loss = load_checkpoint(tag_encoder, clip, optimizer)
 
     # dataset and DDP-compatible loader
     dataset = RefinedImageDataset(
@@ -93,10 +120,13 @@ def train_anchor(rank, world_size, args):
         pin_memory=True,
         collate_fn=skip_broken_collate_fn
     )
+    clip = DDP(clip, device_ids=[rank], find_unused_parameters=False)
+    tag_encoder = DDP(tag_encoder, device_ids=[rank], find_unused_parameters=False)
 
     # train loop
-    best_loss = float('inf')
-    for epoch in range(args.epochs):
+    clip.train()
+    tag_encoder.train()
+    for epoch in range(start_epoch, args.epochs+1):
         total_loss = 0.0
         sampler.set_epoch(epoch)
         progress_bar = tqdm(
@@ -143,14 +173,12 @@ def train_anchor(rank, world_size, args):
         avg_loss = total_loss / len(dataloader)
         if rank == 0 and avg_loss < best_loss:
             best_loss = avg_loss
-            os.makedirs(args.output_dir, exist_ok=True)
-
-            tag_encoder_path = Path(args.output_dir) / 'tag_encoder.pt'
-            torch.save(tag_encoder.module.state_dict(), tag_encoder_path)
-
-            image_encoder_path = Path(args.output_dir) / 'image_encoder.pt'
-            torch.save(clip.module.state_dict(), image_encoder_path)
+            save_weights(tag_encoder.module, best_loss, 'text_encoder', args.output_dir)
+            save_weights(clip.moudle, best_loss, 'image_encoder', args.output_dir)
             print(f'[Epoch {epoch}] encoder saved with loss {avg_loss:.4f}', flush=True)
+
+        if rank == 0 and epoch % 10 == 0:
+            save_checkpoint(epoch, tag_encoder.module, clip.module, optimizer, best_loss)
 
     cleanup()
 
