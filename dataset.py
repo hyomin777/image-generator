@@ -17,17 +17,24 @@ class BaseImageDataset(Dataset):
 
         if is_train:
             self.transform = transforms.Compose([
-                transforms.Resize((256, 256)),
-                transforms.RandomCrop((224, 224)),
-                transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
-                transforms.RandomRotation(10),
-                transforms.ToTensor()
-            ])
+                transforms.RandomResizedCrop(size=(224, 224), scale=(0.7, 1.0), ratio=(0.8, 1.2)),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+                transforms.RandomRotation(30),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.48145466, 0.4578275, 0.40821073],
+                    std=[0.26862954, 0.26130258, 0.27577711]
+                )
+             ])
         else:
             self.transform = transforms.Compose([
                 transforms.Resize((224, 224)),
-                transforms.ToTensor()
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.48145466, 0.4578275, 0.40821073],
+                    std=[0.26862954, 0.26130258, 0.27577711]
+                )
             ])
 
         self._map_tag_to_image()
