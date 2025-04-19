@@ -150,6 +150,8 @@ def train_anchor(rank, world_size, args):
 
     clip.train()
     tag_encoder.train()
+    global_set = (start_epoch - 1) * len(dataloader)
+
     for epoch in range(start_epoch, args.epochs + 1):
         total_loss = 0.0
         sampler.set_epoch(epoch)
@@ -184,8 +186,8 @@ def train_anchor(rank, world_size, args):
             progress_bar.set_postfix({"loss": loss.item()})
 
             if rank == 0 and writer is not None:
-                global_step = epoch * len(dataloader) + step
                 writer.add_scalar('Loss/train_anchor', loss.item(), global_step)
+                global_step += 1
 
         avg_loss = total_loss / len(dataloader)
         if rank == 0 and avg_loss < best_loss:
@@ -196,19 +198,26 @@ def train_anchor(rank, world_size, args):
 
         if rank == 0 and epoch % 10 == 0:
             save_checkpoint(epoch, tag_encoder.module, clip.module, optimizer, best_loss, Path(args.output_dir))
-            sample_batch = next(iter(dataloader))
-            images = sample_batch["image"].to(device)
-            raw_texts = [t["raw_text"] for t in sample_batch["text"]]
-            log_text_image_embeddings(
-                writer,
-                tag=f"Embeddings/Epoch_{epoch}",
-                images=images,
-                raw_texts=raw_texts,
-                image_model=clip,
-                text_encoder=tag_encoder,
-                tokenizer=tokenizer,
-                device=device
-            )
+
+            sample_batch = None
+            for sample in dataloader:
+                if sample is not None:
+                    sample_batch = sample
+                    break
+
+            if sample_batch:
+                images = sample_batch["image"].to(device)
+                raw_texts = [t["raw_text"] for t in sample_batch["text"]]
+                log_text_image_embeddings(
+                    writer,
+                    tag=f"Embeddings/Epoch_{epoch}",
+                    images=images,
+                    raw_texts=raw_texts,
+                    image_model=clip,
+                    text_encoder=tag_encoder,
+                    tokenizer=tokenizer,
+                    device=device
+                )
 
     cleanup()
 
