@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from tag_encoder import TagEncoder
+from encoder.text_encoder import TagEncoder
 from transformers import CLIPModel, PreTrainedTokenizerFast
 from dataset import ImageDataset
 from pathlib import Path

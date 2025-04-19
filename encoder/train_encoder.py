@@ -17,7 +17,7 @@ from transformers import CLIPModel, PreTrainedTokenizerFast
 
 from tqdm import tqdm
 from dataset import ImageDataset
-from tag_encoder import TagEncoder
+from encoder.text_encoder import TagEncoder
 from lora import LoRALinear, extract_lora_weights, load_lora_weights
 from loss import cosine_contrastive_loss
 from utils.ddp import setup, cleanup

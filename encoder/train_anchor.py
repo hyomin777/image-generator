@@ -8,94 +8,22 @@ from pathlib import Path
 
 import torch
 import torch.optim as optim
-import torch.multiprocessing as mp
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel as DDP
-from transformers import PreTrainedTokenizerFast, CLIPModel
+
 from tqdm import tqdm
 
 from dataset import RefinedImageDataset
-from tag_encoder import TagEncoder
-from lora import LoRALinear
+from encoder.text_encoder import TextEncoder
+from encoder.image_encoder import load_image_encoder
 from loss import cosine_contrastive_loss
+from tokenizer.tokenizer import load_tokenizer
 from utils.ddp import setup, cleanup
-from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
 from utils.collate_fn import skip_broken_collate_fn
-
-
-@torch.no_grad()
-def log_text_image_embeddings(writer, tag, images, raw_texts, image_model, text_encoder, tokenizer, device):
-    if writer is None:
-        return
-
-    images = images[:100]
-    raw_texts = raw_texts[:100]
-
-    tokenized = tokenizer(
-        raw_texts,
-        padding=True,
-        truncation=True,
-        max_length=64,
-        return_tensors='pt'
-    )
-    input_ids = tokenized.input_ids.to(device)
-    attention_mask = tokenized.attention_mask.to(device)
-
-    image_model_eval = image_model.module if hasattr(image_model, "module") else image_model
-    image_embeds = image_model_eval.get_image_features(pixel_values=images)
-
-    text_encoder_eval = text_encoder.module if hasattr(text_encoder, "module") else text_encoder
-    text_embeds = text_encoder_eval(input_ids=input_ids, attention_mask=attention_mask)
-
-    all_embeds = torch.cat([image_embeds, text_embeds], dim=0)
-    all_labels = [f"IMG: {t}" for t in raw_texts] + [f"TXT: {t}" for t in raw_texts]
-    dummy_imgs = torch.zeros_like(images.cpu())
-    all_imgs = torch.cat([images.cpu(), dummy_imgs], dim=0)
-
-    writer.add_embedding(
-        all_embeds,
-        metadata=all_labels,
-        label_img=all_imgs,
-        tag=tag
-    )
-
-
-def save_checkpoint(epoch, text_encoder, image_encoder, optimizer, best_loss, output_dir: Path):
-    checkpoint = {
-        'epoch': epoch,
-        'text_encoder_state_dict': text_encoder.state_dict(),
-        'image_encoder_state_dict': image_encoder.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'best_loss': best_loss
-    }
-    checkpoint_dir = output_dir / 'checkpoints'
-    checkpoint_dir.mkdir(exist_ok=True, parents=True)
-    checkpoint_path = checkpoint_dir / 'checkpoint.pth'
-    torch.save(checkpoint, checkpoint_path)
-    print(f'Checkpoint saved at epoch {epoch}')
-
-
-def load_checkpoint(text_encoder, image_encoder, optimizer, output_dir: Path):
-    checkpoint_path = output_dir / 'checkpoints/checkpoint.pth'
-    if checkpoint_path.exists():
-        checkpoint = torch.load(checkpoint_path)
-        text_encoder.load_state_dict(checkpoint['text_encoder_state_dict'])
-        image_encoder.load_state_dict(checkpoint['image_encoder_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        start_epoch = checkpoint['epoch'] + 1
-        best_loss = checkpoint['best_loss']
-        print(f'Checkpoint loaded from epoch {checkpoint["epoch"]}')
-        return start_epoch, best_loss
-    return 1, float('inf')
-
-
-def save_weights(model, loss, save_name, output_dir: Path):
-    output_dir = output_dir / 'weights'
-    output_dir.mkdir(exist_ok=True, parents=True)
-    weights_path = output_dir / f'{save_name}.pth'
-    torch.save(model.state_dict(), weights_path)
-    print(f'Model saved: {save_name} with loss {loss:.4f}')
+from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
+from utils.logging import log_text_image_embeddings
+from utils.save_model import save_checkpoint, load_checkpoint, save_weights
 
 
 def train_anchor(rank, world_size, args):
@@ -108,31 +36,19 @@ def train_anchor(rank, world_size, args):
         os.makedirs(log_dir, exist_ok=True)
         writer = SummaryWriter(log_dir=log_dir)
 
-    tokenizer = PreTrainedTokenizerFast(tokenizer_file=args.tokenizer_path)
-    tokenizer.pad_token = '[PAD]'
-    tokenizer.cls_token = '[CLS]'
-    tokenizer.sep_token = '[SEP]'
+    tokenizer = load_tokenizer(tokenizer_file=args.tokenizer_path)
 
-    clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-    clip.eval()
-    for param in clip.parameters():
-        param.requires_grad = False
-    for i in [-2, -1]:
-        block = clip.vision_model.encoder.layers[i]
-        sa = block.self_attn
-        sa.q_proj = LoRALinear(sa.q_proj, r=4, alpha=1.0).to(device)
-        sa.v_proj = LoRALinear(sa.v_proj, r=4, alpha=1.0).to(device)
+    image_encoder = load_image_encoder(device)
+    text_encoder = TextEncoder(vocab_size=tokenizer.vocab_size).to(device)
 
-    vocab_size = tokenizer.vocab_size
-    tag_encoder = TagEncoder(vocab_size=vocab_size).to(device)
-
-    params_to_optimize = list(tag_encoder.parameters()) + [p for p in clip.parameters() if p.requires_grad]
+    params_to_optimize = list(text_encoder.parameters()) + [p for p in image_encoder.parameters() if p.requires_grad]
     optimizer = optim.AdamW(params_to_optimize, lr=args.lr)
 
     start_epoch = 1
     best_loss = float('inf')
     if args.resume:
-        start_epoch, best_loss = load_checkpoint(tag_encoder, clip, optimizer, Path(args.output_dir))
+        _, _ = load_checkpoint(text_encoder, optimizer, Path(args.output_dir), 'text_encoder')
+        start_epoch, best_loss = load_checkpoint(image_encoder, optimizer, Path(args.output_dir), 'image_encoder')
 
     dataset = RefinedImageDataset(Path(args.data_dir))
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
@@ -145,11 +61,11 @@ def train_anchor(rank, world_size, args):
         collate_fn=skip_broken_collate_fn
     )
 
-    clip = DDP(clip, device_ids=[args.local_rank], find_unused_parameters=False)
-    tag_encoder = DDP(tag_encoder, device_ids=[args.local_rank], find_unused_parameters=False)
+    image_encoder = DDP(image_encoder, device_ids=[args.local_rank], find_unused_parameters=False)
+    text_encoder = DDP(text_encoder, device_ids=[args.local_rank], find_unused_parameters=False)
 
-    clip.train()
-    tag_encoder.train()
+    image_encoder.train()
+    text_encoder.train()
     global_step = (start_epoch - 1) * len(dataloader)
 
     for epoch in range(start_epoch, args.epochs + 1):
@@ -178,9 +94,9 @@ def train_anchor(rank, world_size, args):
             attention_mask_raw = tokenized_raw.attention_mask.to(device)
 
             with torch.no_grad():
-                image_embeds = clip.module.get_image_features(pixel_values=images)
+                image_embeds = image_encoder.module.get_image_features(pixel_values=images)
 
-            raw_text_embeds = tag_encoder(input_ids=input_ids_raw, attention_mask=attention_mask_raw)
+            raw_text_embeds = text_encoder(input_ids=input_ids_raw, attention_mask=attention_mask_raw)
 
             loss = cosine_contrastive_loss(raw_text_embeds, image_embeds)
             optimizer.zero_grad()
@@ -198,13 +114,13 @@ def train_anchor(rank, world_size, args):
         avg_loss = total_loss / len(dataloader)
         if rank == 0 and avg_loss < best_loss:
             best_loss = avg_loss
-            save_weights(tag_encoder.module, best_loss, 'text_encoder', Path(args.output_dir))
-            save_weights(clip.module, best_loss, 'image_encoder', Path(args.output_dir))
+            save_weights(text_encoder.module, best_loss, 'text_encoder', Path(args.output_dir))
+            save_weights(image_encoder.module, best_loss, 'image_encoder', Path(args.output_dir))
             print(f'[Epoch {epoch}] encoder saved with loss {avg_loss:.4f}', flush=True)
 
         if rank == 0 and epoch % 10 == 0:
-            save_checkpoint(epoch, tag_encoder.module, clip.module, optimizer, best_loss, Path(args.output_dir))
-
+            save_checkpoint(epoch, text_encoder.module, optimizer, best_loss, Path(args.output_dir), 'text_encoder')
+            save_checkpoint(epoch, image_encoder.module, optimizer, best_loss, Path(args.output_dir), 'image_encoder')
             sample_batch = None
             for sample in dataloader:
                 if sample is not None:
@@ -219,8 +135,8 @@ def train_anchor(rank, world_size, args):
                     tag=f"Embeddings/Epoch_{epoch}",
                     images=images,
                     raw_texts=raw_texts,
-                    image_model=clip,
-                    text_encoder=tag_encoder,
+                    image_model=image_encoder,
+                    text_encoder=text_encoder,
                     tokenizer=tokenizer,
                     device=device
                 )

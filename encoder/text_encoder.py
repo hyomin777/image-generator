@@ -1,9 +1,8 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-class TagEncoder(nn.Module):
+class TextEncoder(nn.Module):
     def __init__(
             self,
             vocab_size=16384,
