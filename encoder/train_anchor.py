@@ -36,7 +36,7 @@ def log_text_image_embeddings(writer, tag, images, raw_texts, image_model, text_
         raw_texts,
         padding=True,
         truncation=True,
-        max_length=32,
+        max_length=64,
         return_tensors='pt'
     )
     input_ids = tokenized.input_ids.to(device)
@@ -150,14 +150,14 @@ def train_anchor(rank, world_size, args):
 
     clip.train()
     tag_encoder.train()
-    global_set = (start_epoch - 1) * len(dataloader)
+    global_step = (start_epoch - 1) * len(dataloader)
 
     for epoch in range(start_epoch, args.epochs + 1):
         total_loss = 0.0
         sampler.set_epoch(epoch)
         progress_bar = tqdm(dataloader, desc=f"[GPU {rank}] Epoch {epoch}", disable=(rank != 0))
 
-        for step, batch in enumerate(dataloader):
+        for _, batch in enumerate(dataloader):
             if batch is None:
                 progress_bar.update(1)
                 continue
@@ -167,7 +167,13 @@ def train_anchor(rank, world_size, args):
             images = batch["image"].to(device)
             raw_text = [t['raw_text'] for t in batch["text"]]
 
-            tokenized_raw = tokenizer(raw_text, padding=True, truncation=True, max_length=32, return_tensors='pt')
+            tokenized_raw = tokenizer(
+                raw_text,
+                padding=True,
+                truncation=True,
+                max_length=64,
+                return_tensors='pt'
+            )
             input_ids_raw = tokenized_raw.input_ids.to(device)
             attention_mask_raw = tokenized_raw.attention_mask.to(device)
 

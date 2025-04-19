@@ -3,7 +3,8 @@ from tokenizers.processors import TemplateProcessing
 import argparse
 import os
 
-def train_tokenizer(data_file, vocab_size=8192, output_dir="tokenizer"):
+
+def train_tokenizer(data_file, vocab_size=16384, output_dir="tokenizer"):
     os.makedirs(output_dir, exist_ok=True)
 
     tokenizer = Tokenizer(models.BPE(unk_token="[UNK]"))

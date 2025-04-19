@@ -111,8 +111,8 @@ def train_tag_encoder(rank, world_size, args):
             translated_texts = batch['translated_text']
 
             # tokenize
-            tokenized_raw = tokenizer(raw_texts, padding=True, truncation=True, max_length=32, return_tensors='pt')
-            tokenized_translated = tokenizer(translated_texts, padding=True, truncation=True, max_length=32, return_tensors='pt')
+            tokenized_raw = tokenizer(raw_texts, padding=True, truncation=True, max_length=64, return_tensors='pt')
+            tokenized_translated = tokenizer(translated_texts, padding=True, truncation=True, max_length=64, return_tensors='pt')
 
             input_ids_raw = tokenized_raw.input_ids.to(device)
             attention_mask_raw = tokenized_raw.attention_mask.to(device)
