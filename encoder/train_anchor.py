@@ -49,7 +49,11 @@ def train_anchor(rank, world_size, args):
         _, _ = load_checkpoint(text_encoder, optimizer, Path(args.output_dir), 'text_encoder')
         start_epoch, best_loss = load_checkpoint(image_encoder, optimizer, Path(args.output_dir), 'image_encoder')
 
-    dataset = RefinedImageDataset(Path(args.data_dir))
+    dataset = RefinedImageDataset(
+        device=device,
+        data_dir=Path(args.data_dir),
+        is_train=True
+    )
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     dataloader = DataLoader(
         dataset,

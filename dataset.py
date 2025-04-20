@@ -60,8 +60,8 @@ class BaseImageDataset(Dataset):
 
 
 class RefinedImageDataset(BaseImageDataset):
-    def __init__(self, data_dir, is_train=True):
-        super().__init__(data_dir, is_train)
+    def __init__(self, device, data_dir, is_train=True):
+        super().__init__(device, data_dir, is_train)
 
     def _map_tag_to_image(self):
         for img_file in self.image_files:
