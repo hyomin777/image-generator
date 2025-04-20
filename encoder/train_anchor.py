@@ -67,11 +67,11 @@ def train_anchor(rank, world_size, args):
     image_encoder = DDP(image_encoder, device_ids=[args.local_rank], find_unused_parameters=False)
     text_encoder = DDP(text_encoder, device_ids=[args.local_rank], find_unused_parameters=False)
 
-    image_encoder.train()
-    text_encoder.train()
-    global_step = (start_epoch - 1) * len(dataloader)
 
+    global_step = (start_epoch - 1) * len(dataloader)
     for epoch in range(start_epoch, args.epochs + 1):
+        image_encoder.train()
+        text_encoder.train()
         total_loss = 0.0
         sampler.set_epoch(epoch)
         progress_bar = tqdm(dataloader, desc=f"[GPU {rank}] Epoch {epoch}", disable=(rank != 0))
@@ -108,11 +108,16 @@ def train_anchor(rank, world_size, args):
             progress_bar.update(1)
             progress_bar.set_postfix({"loss": loss.item()})
 
+
             if rank == 0 and writer is not None:
-                writer.add_scalar('Loss/train_anchor', loss.item(), global_step)
                 global_step += 1
+                if global_step % 100 == 0:
+                    writer.add_scalar('Loss/anchor_step', loss.item(), global_step)
 
         avg_loss = total_loss / len(dataloader)
+        if rank == 0 and writer is not None:
+            writer.add_scalar('Loss/anchor_epoch', avg_loss, epoch)
+
         if rank == 0 and avg_loss < best_loss:
             best_loss = avg_loss
             save_weights(text_encoder.module, 'text_encoder', Path(args.output_dir))
@@ -136,13 +141,13 @@ def train_anchor(rank, world_size, args):
                     tag=f"Embeddings/Epoch_{epoch}",
                     images=images,
                     raw_texts=raw_texts,
-                    image_model=image_encoder,
+                    image_encoder=image_encoder,
                     text_encoder=text_encoder,
                     tokenizer=tokenizer,
                     device=device
                 )
-
     cleanup()
+    
 
 def main():
     parser = argparse.ArgumentParser()

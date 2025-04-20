@@ -2,7 +2,7 @@ import torch
 
 
 @torch.no_grad()
-def log_text_image_embeddings(writer, tag, images, raw_texts, image_model, text_encoder, tokenizer, device):
+def log_text_image_embeddings(writer, tag, images, raw_texts, image_encoder, text_encoder, tokenizer, device):
     if writer is None:
         return
 
@@ -19,11 +19,13 @@ def log_text_image_embeddings(writer, tag, images, raw_texts, image_model, text_
     input_ids = tokenized.input_ids.to(device)
     attention_mask = tokenized.attention_mask.to(device)
 
-    image_model_eval = image_model.module if hasattr(image_model, "module") else image_model
-    image_embeds = image_model_eval.get_image_features(pixel_values=images)
+    image_encoder = image_encoder.module if hasattr(image_encoder, "module") else image_encoder
+    image_encoder.eval()
+    image_embeds = image_encoder.get_image_features(pixel_values=images)
 
-    text_encoder_eval = text_encoder.module if hasattr(text_encoder, "module") else text_encoder
-    text_embeds = text_encoder_eval(input_ids=input_ids, attention_mask=attention_mask)
+    text_encoder = text_encoder.module if hasattr(text_encoder, "module") else text_encoder
+    text_encoder.eval()
+    text_embeds = text_encoder(input_ids=input_ids, attention_mask=attention_mask)
 
     all_embeds = torch.cat([image_embeds, text_embeds], dim=0)
     all_labels = [f"IMG: {t}" for t in raw_texts] + [f"TXT: {t}" for t in raw_texts]
