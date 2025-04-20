@@ -5,10 +5,12 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 from utils.translator import load_cache, translate
+from transform.transform import normalize, color_jitter 
 
 
 class BaseImageDataset(Dataset):
-    def __init__(self, data_dir: Path, is_train=True):
+    def __init__(self, device, data_dir: Path, is_train=True):
+        self.device = device
         self.data_dir = data_dir
         self.metadata_dir = data_dir / 'metadata'
         self.image_files = [f for f in os.listdir(data_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
@@ -19,22 +21,13 @@ class BaseImageDataset(Dataset):
             self.transform = transforms.Compose([
                 transforms.RandomResizedCrop(size=(224, 224), scale=(0.7, 1.0), ratio=(0.8, 1.2)),
                 transforms.RandomHorizontalFlip(p=0.5),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
                 transforms.RandomRotation(30),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.48145466, 0.4578275, 0.40821073],
-                    std=[0.26862954, 0.26130258, 0.27577711]
-                )
+                transforms.ToTensor()
              ])
         else:
             self.transform = transforms.Compose([
                 transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.48145466, 0.4578275, 0.40821073],
-                    std=[0.26862954, 0.26130258, 0.27577711]
-                )
+                transforms.ToTensor()
             ])
 
         self._map_tag_to_image()
@@ -56,6 +49,12 @@ class BaseImageDataset(Dataset):
             return None
 
         image = self.transform(image)
+        image = color_jitter(image, 0.2, 0.2, 0.2, 0.1)
+        image = normalize(
+            image,
+            mean=[0.48145466, 0.4578275, 0.40821073],
+            std=[0.26862954, 0.26130258, 0.27577711]
+        )
         text = self.image_to_tags[img_name]
         return {"image": image, "text": text}
 
