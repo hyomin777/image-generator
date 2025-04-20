@@ -29,10 +29,10 @@ def load_checkpoint(model, optimizer, output_dir: Path, checkpoint_name):
     return 1, float('inf')
 
 
-def save_weights(model, loss, save_name, output_dir: Path):
+def save_weights(model, save_name, output_dir: Path):
     output_dir = output_dir / 'weights'
     output_dir.mkdir(exist_ok=True, parents=True)
     weights_path = output_dir / f'{save_name}.pth'
     torch.save(model.state_dict(), weights_path)
-    print(f'Model saved: {save_name} with loss {loss:.4f}')
+    print(f'Model saved: {save_name}')
 

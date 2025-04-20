@@ -11,7 +11,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel as DDP
-
 from tqdm import tqdm
 
 from dataset import RefinedImageDataset
@@ -93,9 +92,7 @@ def train_anchor(rank, world_size, args):
             input_ids_raw = tokenized_raw.input_ids.to(device)
             attention_mask_raw = tokenized_raw.attention_mask.to(device)
 
-            with torch.no_grad():
-                image_embeds = image_encoder.module.get_image_features(pixel_values=images)
-
+            image_embeds = image_encoder.module.get_image_features(pixel_values=images)
             raw_text_embeds = text_encoder(input_ids=input_ids_raw, attention_mask=attention_mask_raw)
 
             loss = cosine_contrastive_loss(raw_text_embeds, image_embeds)
@@ -114,8 +111,8 @@ def train_anchor(rank, world_size, args):
         avg_loss = total_loss / len(dataloader)
         if rank == 0 and avg_loss < best_loss:
             best_loss = avg_loss
-            save_weights(text_encoder.module, best_loss, 'text_encoder', Path(args.output_dir))
-            save_weights(image_encoder.module, best_loss, 'image_encoder', Path(args.output_dir))
+            save_weights(text_encoder.module, 'text_encoder', Path(args.output_dir))
+            save_weights(image_encoder.module, 'image_encoder', Path(args.output_dir))
             print(f'[Epoch {epoch}] encoder saved with loss {avg_loss:.4f}', flush=True)
 
         if rank == 0 and epoch % 10 == 0:
