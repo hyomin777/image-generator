@@ -22,12 +22,8 @@ def train_anchor(rank, world_size, args):
     setup()
     device = torch.device(f'cuda:{args.local_rank}')
 
-    tokenizer, dataloader = setup_encoder_train_components(args, rank, world_size, RefinedImageDataset)
-    image_encoder, text_encoder = initialize_encoders(tokenizer, device, lora=True)
-    optimizer = optim.AdamW(
-        list(text_encoder.parameters()) + [p for p in image_encoder.parameters() if p.requires_grad],
-        lr=args.lr
-    )
+    tokenizer, dataloader = setup_encoder_train_components(args, RefinedImageDataset)
+    image_encoder, text_encoder, optimizer = initialize_encoders(args, tokenizer.vocab_size, device)
     writer = None
     if rank == 0:
         writer = summary_writer(args)
@@ -98,7 +94,7 @@ def train_anchor(rank, world_size, args):
         if rank == 0 and epoch % 10 == 0:
             save_checkpoint(epoch, text_encoder.module, optimizer, best_loss, Path(args.output_dir), 'text_encoder')
             save_checkpoint(epoch, image_encoder.module, optimizer, best_loss, Path(args.output_dir), 'image_encoder')
-            
+
             sample_batch = next((s for s in dataloader if s is not None), None)
             if sample_batch:
                 images = sample_batch["image"].to(device)
