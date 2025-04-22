@@ -1,8 +1,9 @@
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 
 @torch.no_grad()
-def log_text_image_embeddings(writer, tag, images, raw_texts, image_encoder, text_encoder, tokenizer, device):
+def log_text_image_embeddings(writer: SummaryWriter, tag, images, raw_texts, image_encoder, text_encoder, tokenizer, device):
     if writer is None:
         return
 
@@ -13,7 +14,7 @@ def log_text_image_embeddings(writer, tag, images, raw_texts, image_encoder, tex
         raw_texts,
         padding=True,
         truncation=True,
-        max_length=64,
+        max_length=128,
         return_tensors='pt'
     )
     input_ids = tokenized.input_ids.to(device)

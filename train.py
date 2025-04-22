@@ -1,0 +1,64 @@
+import os
+from pathlib import Path
+
+import torch
+import torch.optim as optim
+from torch.utils.data import DataLoader, DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.tensorboard import SummaryWriter
+
+from dataset import BaseImageDataset
+from encoder.text_encoder import TextEncoder
+from tokenizer.tokenizer import load_tokenizer
+from utils.collate_fn import skip_broken_collate_fn
+from encoder.image_encoder import load_image_encoder
+
+
+def setup_encoder_train_components(args, dataset_cls:BaseImageDataset):
+    tokenizer = load_tokenizer(args.tokenizer_path)
+    dataset = dataset_cls(Path(args.data_dir))
+    sampler = DistributedSampler(dataset, num_replicas=torch.cuda.device_count(), rank=args.local_rank)
+    dataloader = DataLoader(
+        dataset,
+        sampler=sampler,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        collate_fn=skip_broken_collate_fn
+    )
+    return tokenizer, dataloader
+
+
+def initialize_encoders(args, tokenizer, device, for_alignment=False):
+    image_encoder = load_image_encoder(device)
+    if for_alignment:
+        image_encoder.load_state_dict(torch.load(args.image_encoder_path, map_location=device))
+        image_encoder.eval()
+        for p in image_encoder.parameters():
+            p.requires_grad = False
+    else:
+        for p in image_encoder.parameters():
+            p.requires_grad = True
+
+    text_encoder = TextEncoder(vocab_size=tokenizer.vocab_size).to(device)
+    return image_encoder, text_encoder
+
+
+def wrap_encoders(args, image_encoder, text_encoder, for_alignment=False):
+    image_encoder = DDP(image_encoder, device_ids=[args.local_rank])
+    text_encoder = DDP(text_encoder, device_ids=[args.local_rank])
+
+    if for_alignment:
+        optimizer = optim.AdamW(text_encoder.parameters(), lr=args.lr)
+    else:
+        params = list(text_encoder.parameters()) + [p for p in image_encoder.parameters() if p.requires_grad]
+        optimizer = optim.AdamW(params, lr=args.lr)
+
+    return image_encoder, text_encoder, optimizer
+
+
+def summary_writer(args):
+    log_dir = os.path.join(args.output_dir, 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+    writer = SummaryWriter(log_dir=log_dir)
+    return writer

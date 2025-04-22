@@ -5,75 +5,47 @@ sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 
 import argparse
 from pathlib import Path
-
 import torch
 import torch.optim as optim
-from torch.utils.data import DataLoader, DistributedSampler
-from torch.utils.tensorboard import SummaryWriter
-from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
 from dataset import RefinedImageDataset
-from encoder.text_encoder import TextEncoder
-from encoder.image_encoder import load_image_encoder
 from loss import cosine_contrastive_loss
-from tokenizer.tokenizer import load_tokenizer
 from utils.ddp import setup, cleanup
-from utils.collate_fn import skip_broken_collate_fn
 from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
 from utils.logging import log_text_image_embeddings
 from utils.save_model import save_checkpoint, load_checkpoint, save_weights
+from train import setup_encoder_train_components, initialize_encoders, wrap_encoders, summary_writer
 
 
 def train_anchor(rank, world_size, args):
     setup()
     device = torch.device(f'cuda:{args.local_rank}')
 
+    tokenizer, dataloader = setup_encoder_train_components(args, rank, world_size, RefinedImageDataset)
+    image_encoder, text_encoder = initialize_encoders(tokenizer, device, lora=True)
+    optimizer = optim.AdamW(
+        list(text_encoder.parameters()) + [p for p in image_encoder.parameters() if p.requires_grad],
+        lr=args.lr
+    )
     writer = None
     if rank == 0:
-        log_dir = os.path.join(args.output_dir, 'logs')
-        os.makedirs(log_dir, exist_ok=True)
-        writer = SummaryWriter(log_dir=log_dir)
+        writer = summary_writer(args)
 
-    tokenizer = load_tokenizer(tokenizer_file=args.tokenizer_path)
-
-    image_encoder = load_image_encoder(device)
-    text_encoder = TextEncoder(vocab_size=tokenizer.vocab_size).to(device)
-
-    params_to_optimize = list(text_encoder.parameters()) + [p for p in image_encoder.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(params_to_optimize, lr=args.lr)
-
-    start_epoch = 1
-    best_loss = float('inf')
     if args.resume:
         _, _ = load_checkpoint(text_encoder, optimizer, Path(args.output_dir), 'text_encoder')
         start_epoch, best_loss = load_checkpoint(image_encoder, optimizer, Path(args.output_dir), 'image_encoder')
+    else:
+        start_epoch, best_loss = 1, float('inf')
 
-    dataset = RefinedImageDataset(
-        device=device,
-        data_dir=Path(args.data_dir),
-        is_train=True
-    )
-    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
-    dataloader = DataLoader(
-        dataset,
-        sampler=sampler,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        collate_fn=skip_broken_collate_fn
-    )
-
-    image_encoder = DDP(image_encoder, device_ids=[args.local_rank], find_unused_parameters=False)
-    text_encoder = DDP(text_encoder, device_ids=[args.local_rank], find_unused_parameters=False)
-
+    image_encoder, text_encoder = wrap_encoders(args, image_encoder, text_encoder)
 
     global_step = (start_epoch - 1) * len(dataloader)
     for epoch in range(start_epoch, args.epochs + 1):
         image_encoder.train()
         text_encoder.train()
         total_loss = 0.0
-        sampler.set_epoch(epoch)
+        dataloader.sampler.set_epoch(epoch)
         progress_bar = tqdm(dataloader, desc=f"[GPU {rank}] Epoch {epoch}", disable=(rank != 0))
 
         for _, batch in enumerate(dataloader):
@@ -90,7 +62,7 @@ def train_anchor(rank, world_size, args):
                 raw_text,
                 padding=True,
                 truncation=True,
-                max_length=64,
+                max_length=128,
                 return_tensors='pt'
             )
             input_ids_raw = tokenized_raw.input_ids.to(device)
@@ -107,7 +79,6 @@ def train_anchor(rank, world_size, args):
             total_loss += loss.item()
             progress_bar.update(1)
             progress_bar.set_postfix({"loss": loss.item()})
-
 
             if rank == 0 and writer is not None:
                 global_step += 1
@@ -127,12 +98,8 @@ def train_anchor(rank, world_size, args):
         if rank == 0 and epoch % 10 == 0:
             save_checkpoint(epoch, text_encoder.module, optimizer, best_loss, Path(args.output_dir), 'text_encoder')
             save_checkpoint(epoch, image_encoder.module, optimizer, best_loss, Path(args.output_dir), 'image_encoder')
-            sample_batch = None
-            for sample in dataloader:
-                if sample is not None:
-                    sample_batch = sample
-                    break
-
+            
+            sample_batch = next((s for s in dataloader if s is not None), None)
             if sample_batch:
                 images = sample_batch["image"].to(device)
                 raw_texts = [t["raw_text"] for t in sample_batch["text"]]
@@ -146,8 +113,9 @@ def train_anchor(rank, world_size, args):
                     tokenizer=tokenizer,
                     device=device
                 )
+
     cleanup()
-    
+
 
 def main():
     parser = argparse.ArgumentParser()
