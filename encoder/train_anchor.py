@@ -91,7 +91,7 @@ def train_anchor(rank, world_size, args):
             save_weights(image_encoder.module, 'image_encoder', Path(args.output_dir))
             print(f'[Epoch {epoch}] encoder saved with loss {avg_loss:.4f}', flush=True)
 
-        if rank == 0 and epoch % 10 == 0:
+        if rank == 0 and epoch % 5 == 0:
             save_checkpoint(epoch, text_encoder.module, optimizer, best_loss, Path(args.output_dir), 'text_encoder')
             save_checkpoint(epoch, image_encoder.module, optimizer, best_loss, Path(args.output_dir), 'image_encoder')
 
@@ -115,8 +115,8 @@ def train_anchor(rank, world_size, args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--tokenizer_path", type=str, required=True)
+    parser.add_argument("--data_dir", type=str, default="/mnt/usb/refined_images")
+    parser.add_argument("--tokenizer_path", type=str, default="tokenizer/tokenizer.json")
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)
