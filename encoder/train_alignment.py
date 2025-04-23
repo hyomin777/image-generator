@@ -53,7 +53,9 @@ def train_alignment(rank, world_size, args):
     image_encoder = DDP(image_encoder, device_ids=[args.local_rank])
     text_encoder = DDP(text_encoder, device_ids=[args.local_rank])
 
+    image_encoder.eval()
     for epoch in range(start_epoch, args.epochs + 1):
+        text_encoder.train()
         total_loss = 0
         sampler.set_epoch(epoch)
         progress_bar = tqdm(dataloader, desc=f"[GPU {rank}] Epoch {epoch}", disable=(rank != 0))
@@ -67,25 +69,29 @@ def train_alignment(rank, world_size, args):
 
             images = batch["image"].to(device)
             raw_texts = [t["raw_text"] for t in batch["text"]]
-            translated_texts = [t["translated_text"] for t in batch["text"]]
+
+            tokenized_raw = tokenizer(
+                raw_texts,
+                padding=True,
+                truncation=True,
+                max_length=128, 
+                return_tensors='pt'
+            )
+            input_ids_raw = tokenized_raw.input_ids.to(device)
+            attention_mask_raw = tokenized_raw.attention_mask.to(device)
 
             with torch.no_grad():
                 image_embeds = image_encoder.module.get_image_features(pixel_values=images)
+            raw_text_embeds = text_encoder(input_ids=input_ids_raw, attention_mask=attention_mask_raw)
 
-            tokenized_raw = tokenizer(raw_texts, padding=True, truncation=True, max_length=32, return_tensors='pt')
-            tokenized_trans = tokenizer(translated_texts, padding=True, truncation=True, max_length=32, return_tensors='pt')
-
-            raw_embed = text_encoder(input_ids=tokenized_raw.input_ids.to(device),
-                                     attention_mask=tokenized_raw.attention_mask.to(device))
-            trans_embed = text_encoder(input_ids=tokenized_trans.input_ids.to(device),
-                                       attention_mask=tokenized_trans.attention_mask.to(device))
-
-            loss = cosine_contrastive_loss(raw_embed, trans_embed)
+            loss = cosine_contrastive_loss(raw_text_embeds, image_embeds)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             total_loss += loss.item()
+            progress_bar.update(1)
+            progress_bar.set_postfix({"loss": loss.item()})
 
         avg_loss = total_loss / len(dataloader)
         if rank == 0:
@@ -99,8 +105,8 @@ def train_alignment(rank, world_size, args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--tokenizer_path", type=str, required=True)
+    parser.add_argument("--data_dir", type=str, default='/mnt/usb/images')
+    parser.add_argument("--tokenizer_path", type=str, default='tokenizer/tokenizer.json')
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=32)
