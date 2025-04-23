@@ -7,10 +7,11 @@ from torchvision import transforms
 from utils.translator import load_cache, translate
 from transform.transform import normalize, color_jitter 
 
+Image.MAX_IMAGE_PIXELS = None
+
 
 class BaseImageDataset(Dataset):
-    def __init__(self, device, data_dir: Path, is_train=True):
-        self.device = device
+    def __init__(self, data_dir: Path, is_train=True):
         self.data_dir = data_dir
         self.metadata_dir = data_dir / 'metadata'
         self.image_files = [f for f in os.listdir(data_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
@@ -60,9 +61,6 @@ class BaseImageDataset(Dataset):
 
 
 class RefinedImageDataset(BaseImageDataset):
-    def __init__(self, device, data_dir, is_train=True):
-        super().__init__(device, data_dir, is_train)
-
     def _map_tag_to_image(self):
         for img_file in self.image_files:
             try:

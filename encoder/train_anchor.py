@@ -22,12 +22,8 @@ def train_anchor(rank, world_size, args):
     setup()
     device = torch.device(f'cuda:{args.local_rank}')
 
-    tokenizer, dataloader = setup_encoder_train_components(args, rank, world_size, RefinedImageDataset)
-    image_encoder, text_encoder = initialize_encoders(tokenizer, device, lora=True)
-    optimizer = optim.AdamW(
-        list(text_encoder.parameters()) + [p for p in image_encoder.parameters() if p.requires_grad],
-        lr=args.lr
-    )
+    tokenizer, dataloader = setup_encoder_train_components(args, RefinedImageDataset)
+    image_encoder, text_encoder, optimizer = initialize_encoders(args, tokenizer.vocab_size, device)
     writer = None
     if rank == 0:
         writer = summary_writer(args)
@@ -95,10 +91,10 @@ def train_anchor(rank, world_size, args):
             save_weights(image_encoder.module, 'image_encoder', Path(args.output_dir))
             print(f'[Epoch {epoch}] encoder saved with loss {avg_loss:.4f}', flush=True)
 
-        if rank == 0 and epoch % 10 == 0:
+        if rank == 0 and epoch % 5 == 0:
             save_checkpoint(epoch, text_encoder.module, optimizer, best_loss, Path(args.output_dir), 'text_encoder')
             save_checkpoint(epoch, image_encoder.module, optimizer, best_loss, Path(args.output_dir), 'image_encoder')
-            
+
             sample_batch = next((s for s in dataloader if s is not None), None)
             if sample_batch:
                 images = sample_batch["image"].to(device)
@@ -119,8 +115,8 @@ def train_anchor(rank, world_size, args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--tokenizer_path", type=str, required=True)
+    parser.add_argument("--data_dir", type=str, default="/mnt/usb/refined_images")
+    parser.add_argument("--tokenizer_path", type=str, default="tokenizer/tokenizer.json")
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)

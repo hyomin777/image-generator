@@ -1,29 +1,29 @@
+import os
+import sys
+
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler
 
+from encoder.text_encoder import TextEncoder
+from tokenizer.tokenizer import load_tokenizer
 
-class TextToImageModel(nn.Module):
-    def __init__(self):
+
+class ImageGenerator(nn.Module):
+    def __init__(self, device, tokenizer_path):
         super().__init__()
+        self.device = device
+        self.dtype = torch.float16
 
-        # Set consistent data type
-        self.dtype = torch.float16  # to save GPU memory
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Load pretrained models
-        self.tokenizer = CLIPTokenizer.from_pretrained(
-            "openai/clip-vit-large-patch14")
-        self.text_encoder = CLIPTextModel.from_pretrained(
-            "openai/clip-vit-large-patch14").to(device).to(self.dtype)
+        self.tokenizer = load_tokenizer(tokenizer_path)
+        self.text_encoder = TextEncoder(vocab_size=self.tokenizer.vocab_size).to(self.device).to(self.dtype)
         self.vae = AutoencoderKL.from_pretrained(
-            "stabilityai/sd-vae-ft-mse").to(device).to(self.dtype)
+            "stabilityai/sd-vae-ft-mse").to(self.device).to(self.dtype)
         self.unet = UNet2DConditionModel.from_pretrained(
-            "CompVis/stable-diffusion-v1-4", subfolder="unet").to(device).to(self.dtype)
-
-        # Noise scheduler
+            "CompVis/stable-diffusion-v1-4", subfolder="unet").to(self.device).to(self.dtype)
         self.scheduler = DDPMScheduler.from_pretrained(
             "CompVis/stable-diffusion-v1-4", subfolder="scheduler")
 
@@ -32,25 +32,23 @@ class TextToImageModel(nn.Module):
         self.text_encoder.requires_grad_(False)
         
     def encode_text(self, text):
-        # Move tensors to the same device and type as the model
-        device = next(self.text_encoder.parameters()).device
-        dtype = self.dtype
-
         # Convert string to list (always process as batch)
         if isinstance(text, str):
             text = [text]
 
         # Tokenize
         text_inputs = self.tokenizer(
-            text, padding="max_length", max_length=self.tokenizer.model_max_length,
+            text, padding=True, max_length=self.tokenizer.model_max_length,
             truncation=True, return_tensors="pt"
         )
+
         # Move input tensors to appropriate device
-        text_input_ids = text_inputs.input_ids.to(device)
+        attention_mask = text_inputs.attention_mask.to(self.device)
+        text_input_ids = text_inputs.input_ids.to(self.device)
 
         # Get text embeddings
         with torch.no_grad():
-            text_embeddings = self.text_encoder(text_input_ids)[0].to(dtype)
+            text_embeddings = self.text_encoder(input_ids=text_input_ids, attention_mask=attention_mask)
 
         return text_embeddings
 
@@ -62,10 +60,6 @@ class TextToImageModel(nn.Module):
         return image
 
     def forward(self, text, num_inference_steps=50, guidance_scale=7.5):
-        # Check device and type of the model
-        device = next(self.unet.parameters()).device
-        dtype = self.dtype
-
         # Get text embeddings
         text_embeddings = self.encode_text(text)
 
@@ -80,12 +74,11 @@ class TextToImageModel(nn.Module):
         self.scheduler.set_timesteps(num_inference_steps)
         timesteps = self.scheduler.timesteps
 
-        # Generate initial random noise - explicitly specify device and type
-        # Warning fix: access in_channels from config
+        # Generate initial random noise
         latents = torch.randn(
             (1, self.unet.config.in_channels, 64, 64),
-            device=device,
-            dtype=dtype
+            device=self.device,
+            dtype=self.dtype
         )
 
         # Denoising loop
@@ -98,7 +91,7 @@ class TextToImageModel(nn.Module):
                 latent_model_input, t)
 
             # Move timestep to correct device and type
-            t_tensor = t.to(device).to(dtype)
+            t_tensor = t.to(self.device).to(self.dtype)
 
             # Predict noise
             with torch.no_grad():
@@ -113,7 +106,7 @@ class TextToImageModel(nn.Module):
 
             # Compute previous noisy sample
             latents = self.scheduler.step(
-                noise_pred, t, latents).prev_sample.to(dtype)
+                noise_pred, t, latents).prev_sample.to(self.dtype)
 
         # Decode latents to image
         image = self.decode_latents(latents)
@@ -121,17 +114,14 @@ class TextToImageModel(nn.Module):
         return image
     
     def train_step(self, image, text, noise_scheduler):
-        device = next(self.parameters()).device
-        dtype = self.dtype
-
         # Encode image into latent
         with torch.no_grad():
-            latent = self.vae.encode(image.to(device, dtype)).latent_dist.sample()
+            latent = self.vae.encode(image.to(self.device, self.dtype)).latent_dist.sample()
             latent = latent * 0.18215
 
         # Sample timestep t
         bsz = latent.shape[0]
-        t = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=device).long()
+        t = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=self.device).long()
 
         # Add noise
         noise = torch.randn_like(latent)

@@ -29,32 +29,19 @@ def setup_encoder_train_components(args, dataset_cls:BaseImageDataset):
     return tokenizer, dataloader
 
 
-def initialize_encoders(args, tokenizer, device, for_alignment=False):
+def initialize_encoders(args, vocab_size, device):
     image_encoder = load_image_encoder(device)
-    if for_alignment:
-        image_encoder.load_state_dict(torch.load(args.image_encoder_path, map_location=device))
-        image_encoder.eval()
-        for p in image_encoder.parameters():
-            p.requires_grad = False
-    else:
-        for p in image_encoder.parameters():
-            p.requires_grad = True
+    text_encoder = TextEncoder(vocab_size=vocab_size).to(device)
 
-    text_encoder = TextEncoder(vocab_size=tokenizer.vocab_size).to(device)
-    return image_encoder, text_encoder
+    params_to_optimize = list(text_encoder.parameters()) + [p for p in image_encoder.parameters() if p.requires_grad]
+    optimizer = optim.AdamW(params_to_optimize, lr=args.lr)
+    return image_encoder, text_encoder, optimizer
 
 
-def wrap_encoders(args, image_encoder, text_encoder, for_alignment=False):
+def wrap_encoders(args, image_encoder, text_encoder):
     image_encoder = DDP(image_encoder, device_ids=[args.local_rank])
     text_encoder = DDP(text_encoder, device_ids=[args.local_rank])
-
-    if for_alignment:
-        optimizer = optim.AdamW(text_encoder.parameters(), lr=args.lr)
-    else:
-        params = list(text_encoder.parameters()) + [p for p in image_encoder.parameters() if p.requires_grad]
-        optimizer = optim.AdamW(params, lr=args.lr)
-
-    return image_encoder, text_encoder, optimizer
+    return image_encoder, text_encoder
 
 
 def summary_writer(args):
