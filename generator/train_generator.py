@@ -11,12 +11,12 @@ import torch.optim as optim
 
 from tqdm import tqdm
 
-from image_generator import ImageGenerator, load_image_generator
+from image_generator import ImageGenerator
 from dataset import RefinedImageDataset
 from utils.ddp import setup, cleanup
 from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
 from utils.save_model import save_checkpoint, load_checkpoint, save_weights
-from train import summary_writer, setup_train_dataloader, wrap_model 
+from train import summary_writer, setup_train_dataloader, wrap_model
 
 
 def train_generator(args):
@@ -24,20 +24,20 @@ def train_generator(args):
     device = torch.device(f'cuda:{args.local_rank}')
 
     # image generator
-    image_generator: ImageGenerator = load_image_generator(device, args.tokenizer_path)
+    image_generator = ImageGenerator(device, args.tokenizer_path, args.text_encoder_path)
 
     # dataset
     dataloader = setup_train_dataloader(args, RefinedImageDataset)
 
     # optimizer
-    params_to_optimize = [param for param in image_generator.parameters() if param.requires_grad]
+    params_to_optimize = [p for p in image_generator.parameters() if p.requires_grad]
     optimizer = optim.AdamW(params_to_optimize, lr=args.lr)
 
     # tensorboard writer
     writer = None
     if args.local_rank == 0:
         writer = summary_writer(args)
-    
+
     # load checkpoint
     if args.resume:
         start_epoch, best_loss = load_checkpoint(image_generator, optimizer, Path(args.output_dir), 'image_generator')
@@ -81,10 +81,10 @@ def train_generator(args):
         avg_loss = total_loss / len(dataloader)
         if args.local_rank == 0 and avg_loss < best_loss:
             best_loss = avg_loss
-            save_weights(image_generator.module, 'image_generator', Path(args.output_dir))
+            save_model(image_generator.module, 'image_generator', Path(args.output_dir))
             print(f'[Epoch {epoch}] Generator saved with loss {avg_loss:.4f}', flush=True)
-       
-        if args.local_rank == 0 and epoch % 5 == 0:
+
+        if args.local_rank == 0:
             save_checkpoint(epoch, image_generator.module, optimizer, best_loss, Path(args.output_dir), 'image_generator')
 
     cleanup()
@@ -94,6 +94,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default="/mnt/usb/refined_images")
     parser.add_argument("--tokenizer_path", type=str, default="tokenizer/tokenizer.json")
+    parser.add_argument("--text_encoder_path", type=str, default="output/weights/text_encoder.pth")
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)

@@ -26,10 +26,18 @@ class TextEncoder(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
         self.projection = nn.Linear(embed_dim, projection_dim)
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, return_pooled=True):
         x = self.embedding(input_ids)  # (B, T, D)
-        x = self.transformer(x, src_key_padding_mask=~attention_mask.bool() if attention_mask is not None else None)
-        x = self.norm(x[:, 0])  # use first token (like CLS)
-        x = self.projection(x)
-        return F.normalize(x, dim=-1)
+        x = self.transformer(
+            x,
+            src_key_padding_mask=~attention_mask.bool() if attention_mask is not None else None
+        )
+        x = self.norm(x)
 
+        if return_pooled:
+            # CLIP-style pooled representation (B, D)
+            x = self.projection(x[:, 0])  # Use first token (CLS)
+            return F.normalize(x, dim=-1)
+        else:
+            # Sequence representation (B, T, D) for diffusion
+            return self.projection(x)  # No normalize
