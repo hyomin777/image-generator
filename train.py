@@ -9,13 +9,12 @@ from torch.utils.tensorboard import SummaryWriter
 
 from dataset import BaseImageDataset
 from encoder.text_encoder import TextEncoder
-from tokenizer.tokenizer import load_tokenizer
+
 from utils.collate_fn import skip_broken_collate_fn
 from encoder.image_encoder import load_image_encoder
 
 
-def setup_encoder_train_components(args, dataset_cls:BaseImageDataset):
-    tokenizer = load_tokenizer(args.tokenizer_path)
+def setup_train_dataloader(args, dataset_cls:BaseImageDataset):
     dataset = dataset_cls(Path(args.data_dir))
     sampler = DistributedSampler(dataset, num_replicas=torch.cuda.device_count(), rank=args.local_rank)
     dataloader = DataLoader(
@@ -26,7 +25,7 @@ def setup_encoder_train_components(args, dataset_cls:BaseImageDataset):
         pin_memory=True,
         collate_fn=skip_broken_collate_fn
     )
-    return tokenizer, dataloader
+    return dataloader
 
 
 def initialize_encoders(args, vocab_size, device):
@@ -38,10 +37,9 @@ def initialize_encoders(args, vocab_size, device):
     return image_encoder, text_encoder, optimizer
 
 
-def wrap_encoders(args, image_encoder, text_encoder):
-    image_encoder = DDP(image_encoder, device_ids=[args.local_rank])
-    text_encoder = DDP(text_encoder, device_ids=[args.local_rank])
-    return image_encoder, text_encoder
+def wrap_model(rank, model):
+    model = DDP(model, device_ids=[rank])
+    return model
 
 
 def summary_writer(args):

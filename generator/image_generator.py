@@ -10,6 +10,7 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler
 
 from encoder.text_encoder import TextEncoder
 from tokenizer.tokenizer import load_tokenizer
+from lora import LoRALinear
 
 
 class ImageGenerator(nn.Module):
@@ -101,8 +102,7 @@ class ImageGenerator(nn.Module):
 
             # Perform guidance
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + guidance_scale * \
-                (noise_pred_text - noise_pred_uncond)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
             # Compute previous noisy sample
             latents = self.scheduler.step(
@@ -113,7 +113,7 @@ class ImageGenerator(nn.Module):
 
         return image
     
-    def train_step(self, image, text, noise_scheduler):
+    def train_step(self, image, text):
         # Encode image into latent
         with torch.no_grad():
             latent = self.vae.encode(image.to(self.device, self.dtype)).latent_dist.sample()
@@ -121,11 +121,11 @@ class ImageGenerator(nn.Module):
 
         # Sample timestep t
         bsz = latent.shape[0]
-        t = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=self.device).long()
+        t = torch.randint(0, self.scheduler.config.num_train_timesteps, (bsz,), device=self.device).long()
 
         # Add noise
         noise = torch.randn_like(latent)
-        noisy_latent = noise_scheduler.add_noise(latent, noise, t)
+        noisy_latent = self.scheduler.add_noise(latent, noise, t)
 
         # Text embedding
         text_embed = self.encode_text(text)
@@ -136,3 +136,28 @@ class ImageGenerator(nn.Module):
         # Loss
         loss = F.mse_loss(noise_pred, noise)
         return loss
+
+
+def load_image_generator(device, tokenizer_path):
+    target_names = ("to_q", "to_k", "to_v", "to_out")
+
+    image_generator = ImageGenerator(device, tokenizer_path)
+    image_generator.unet.eval()
+    for param in image_generator.unet.parameters():
+        param.requires_grad = False
+
+    for name, module in image_generator.unet.named_modules():
+        if isinstance(module, nn.Linear) and any(key in name for key in target_names):
+            parent_module = get_parent_module(image_generator.unet, name)
+            attr_name = name.split('.')[-1]
+            setattr(parent_module, attr_name, LoRALinear(module).to(device))
+
+    return image_generator
+
+
+def get_parent_module(model: nn.Module, module_name: str):
+    names = module_name.split(".")
+    parent = model
+    for name in names[:-1]:
+        parent = getattr(parent, name)
+    return parent

@@ -21,7 +21,7 @@ def get_gpu_temp(gpu_id=0):
 def wait_for_cooldown(gpu_id=0, threshold=70):
     print(f"[GPU {gpu_id}]aiting to cool below {threshold}C..", flush=True)
     while True:
-        temp = get_gpu_temperature(gpu_id)
+        temp = get_gpu_temp(gpu_id)
         print(f"   → Current temp: {temp}℃")
         if temp <= threshold:
             print(f"[GPU {gpu_id}] Resuming training.", flush=True)
