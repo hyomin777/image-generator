@@ -64,7 +64,7 @@ def train_generator(args):
             images = batch["image"].to(device)
             raw_text = [t['raw_text'] for t in batch["text"]]
 
-            loss = image_generator.train_step(images, raw_text)
+            loss = image_generator.module.train_step(images, raw_text)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

@@ -39,7 +39,7 @@ class ImageGenerator(nn.Module):
 
         # Tokenize
         text_inputs = self.tokenizer(
-            text, padding=True, max_length=self.tokenizer.model_max_length,
+            text, padding=True, max_length=128,
             truncation=True, return_tensors="pt"
         )
 
@@ -150,9 +150,10 @@ def load_image_generator(device, tokenizer_path):
         if isinstance(module, nn.Linear) and any(key in name for key in target_names):
             parent_module = get_parent_module(image_generator.unet, name)
             attr_name = name.split('.')[-1]
-            setattr(parent_module, attr_name, LoRALinear(module).to(device))
+            lora = LoRALinear(module).to(device, dtype=module.weight.dtype)
+            setattr(parent_module, attr_name, lora)
 
-    return image_generator
+    return image_generator.to(device)
 
 
 def get_parent_module(model: nn.Module, module_name: str):
