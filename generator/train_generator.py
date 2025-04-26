@@ -8,7 +8,7 @@ from pathlib import Path
 
 import torch
 import torch.optim as optim
-
+from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from image_generator import ImageGenerator
@@ -96,7 +96,13 @@ def train_generator(args):
                 image_generator.module.text_encoder,
                 optimizer, best_loss, Path(args.output_dir), 'generator_text_encoder')
             writer.add_scalar('Loss/generator_epoch', avg_loss, epoch)
-
+            
+            image_generator.eval()
+            with torch.no_grad():
+                sample_text = ['1girl black_shirt black_skirt blue_archive black_halo shiroko_(blue_archive)']
+                generated_image = image_generator.module(sample_text)
+                grid = make_grid(generated_image, nrow=1)
+                writer.add_image(f'Generated/Epoch_{epoch}', grid, epoch)
     cleanup()
 
 
