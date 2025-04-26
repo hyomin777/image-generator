@@ -5,7 +5,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 from utils.translator import load_cache, translate
-from transform.transform import normalize, color_jitter 
+from transform.transform import normalize, color_jitter
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -44,13 +44,20 @@ class BaseImageDataset(Dataset):
         img_path = self.data_dir / img_name
 
         try:
+            with Image.open(img_path) as img:
+                img.verify()
+        except Exception as e:
+            print(f"[WARNING] Corrupt image {img_name}: {e}")
+            return None
+
+        try:
             image = Image.open(img_path).convert('RGB')
         except Exception as e:
             print(f"[WARNING] Failed to load {img_name}: {e}")
             return None
 
         image = self.transform(image)
-        image = color_jitter(image, 0.2, 0.2, 0.2, 0.1)
+        image = color_jitter(image, 0.1, 0.1, 0.1, 0.05)
         image = normalize(
             image,
             mean=[0.48145466, 0.4578275, 0.40821073],

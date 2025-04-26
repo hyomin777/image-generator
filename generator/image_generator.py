@@ -13,34 +13,25 @@ from tokenizer.tokenizer import load_tokenizer
 
 
 class ImageGenerator(nn.Module):
-    def __init__(self, device, tokenizer_path, text_encoder_path):
+    def __init__(self, device, tokenizer_path):
         super().__init__()
         self.device = device
-        self.dtype = torch.float16
+        self.dtype = torch.float32
 
         self.tokenizer = load_tokenizer(tokenizer_path)
 
-        state_dict = torch.load(text_encoder_path, map_location=self.device)
+#        state_dict = torch.load(text_encoder_path, map_location=self.device)
         self.text_encoder = TextEncoder(
-            vocab_size=self.tokenizer.vocab_size,
-            projection_dim=state_dict['projection.weight'].shape[0]
+            vocab_size=self.tokenizer.vocab_size
         ).to(self.device).to(self.dtype)
-        self.text_encoder.load_state_dict(state_dict)
-        self.text_encoder = self.text_encoder.half()
 
         self.vae = AutoencoderKL.from_pretrained(
             "stabilityai/sd-vae-ft-mse").to(self.device).to(self.dtype)
-        self.unet = UNet2DConditionModel.from_pretrained(
-            "CompVis/stable-diffusion-v1-4", subfolder="unet", cross_attention_dim=512, ignore_mismatched_sizes=True, low_cpu_mem_usage=False).to(self.device).to(self.dtype)
-
-        # Set default attention processor to avoid LoRA-related errors
-        self.unet.set_attn_processor(AttnProcessor())
-
+        self.unet = load_unet(self.device).to(self.dtype)
         self.scheduler = DDPMScheduler.from_pretrained(
             "CompVis/stable-diffusion-v1-4", subfolder="scheduler")
 
         self.vae.requires_grad_(False)
-        self.text_encoder.requires_grad_(False)
 
     def encode_text(self, text):
         if isinstance(text, str):
@@ -51,8 +42,7 @@ class ImageGenerator(nn.Module):
         )
         attention_mask = text_inputs.attention_mask.to(self.device)
         text_input_ids = text_inputs.input_ids.to(self.device)
-        with torch.no_grad():
-            text_embeddings = self.text_encoder(input_ids=text_input_ids, attention_mask=attention_mask, return_pooled=False)
+        text_embeddings = self.text_encoder(input_ids=text_input_ids, attention_mask=attention_mask, return_pooled=False)
         return text_embeddings
 
     def decode_latents(self, latents):
@@ -95,7 +85,6 @@ class ImageGenerator(nn.Module):
         with torch.no_grad():
             latent = self.vae.encode(image.to(self.device, self.dtype)).latent_dist.sample()
             latent = latent * 0.18215
-
         bsz = latent.shape[0]
         t = torch.randint(0, self.scheduler.config.num_train_timesteps, (bsz,), device=self.device).long()
         noise = torch.randn_like(latent)
@@ -104,3 +93,29 @@ class ImageGenerator(nn.Module):
         noise_pred = self.unet(noisy_latent, t.to(self.dtype), encoder_hidden_states=text_embed).sample
         loss = F.mse_loss(noise_pred, noise)
         return loss
+
+
+def load_unet(device):
+    unet = UNet2DConditionModel(
+        sample_size=64,
+        in_channels=4,
+        out_channels=4,
+        layers_per_block=2,
+        block_out_channels=(320, 640, 1280, 1280),
+        down_block_types=(
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+            "DownBlock2D",
+        ),
+        up_block_types=(
+            "UpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+        ),
+        cross_attention_dim=768,
+        attention_head_dim=8,
+    ).to(device)
+
+    return unet

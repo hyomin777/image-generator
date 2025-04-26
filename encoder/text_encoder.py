@@ -6,10 +6,10 @@ class TextEncoder(nn.Module):
     def __init__(
             self,
             vocab_size=16384,
-            embed_dim=512,
+            embed_dim=768,
             num_layers=8,
             n_head=8,
-            projection_dim=512,
+            projection_dim=768,
             dropout=0.2
         ):
         super().__init__()

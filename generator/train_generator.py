@@ -24,7 +24,7 @@ def train_generator(args):
     device = torch.device(f'cuda:{args.local_rank}')
 
     # image generator
-    image_generator = ImageGenerator(device, args.tokenizer_path, args.text_encoder_path)
+    image_generator = ImageGenerator(device, args.tokenizer_path)
 
     # dataset
     dataloader = setup_train_dataloader(args, RefinedImageDataset)
@@ -38,9 +38,8 @@ def train_generator(args):
     if args.local_rank == 0:
         writer = summary_writer(args)
 
-    # load checkpoint
     if args.resume:
-        start_epoch, best_loss = load_checkpoint(image_generator, optimizer, Path(args.output_dir), 'image_generator')
+        start_epoch, best_loss = load_checkpoint(image_generator, optimizer, Path(args.output_dir), 'generator_unet')
     else:
         start_epoch, best_loss = 1, float('inf')
 
@@ -67,6 +66,7 @@ def train_generator(args):
             loss = image_generator.module.train_step(images, raw_text)
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(image_generator.parameters(), max_norm=1.0)
             optimizer.step()
 
             total_loss += loss.item()
@@ -81,11 +81,19 @@ def train_generator(args):
         avg_loss = total_loss / len(dataloader)
         if args.local_rank == 0 and avg_loss < best_loss:
             best_loss = avg_loss
-            save_model(image_generator.module, 'image_generator', Path(args.output_dir))
+            save_model(image_generator.module.unet, 'unet', Path(args.output_dir))
+            save_model(image_generator.module.text_encoder, 'text_encoder', Path(args.output_dir))
             print(f'[Epoch {epoch}] Generator saved with loss {avg_loss:.4f}', flush=True)
 
         if args.local_rank == 0:
-            save_checkpoint(epoch, image_generator.module, optimizer, best_loss, Path(args.output_dir), 'image_generator')
+            save_checkpoint(
+                epoch,
+                image_generator.module.unet,
+                optimizer, best_loss, Path(args.output_dir), 'generator_unet')
+            save_checkpoint(
+                epoch,
+                image_generator.module.text_encoder,
+                optimizer, best_loss, Path(args.output_dir), 'generator_text_encoder')
 
     cleanup()
 

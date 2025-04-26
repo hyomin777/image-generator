@@ -67,8 +67,9 @@ def train_anchor(args):
             attention_mask_raw = tokenized_raw.attention_mask.to(device)
 
             image_embeds = image_encoder.module.get_image_features(pixel_values=images)
+            print(f'Image embeds Shape: {image_embeds.shape}')
             raw_text_embeds = text_encoder(input_ids=input_ids_raw, attention_mask=attention_mask_raw)
-
+            print(f'Text embeds Shape {raw_text_embeds.shape}')
             loss = cosine_contrastive_loss(raw_text_embeds, image_embeds)
             optimizer.zero_grad()
             loss.backward()
