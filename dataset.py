@@ -83,7 +83,7 @@ class RefinedImageDataset(BaseImageDataset):
                 if not raw_tags:
                     continue
 
-                raw_text = ' [SEP] '.join(raw_tags)
+                raw_text = ' '.join(raw_tags)
                 self.image_paths.append(img_file)
                 self.image_to_tags[img_file] = {'raw_text': raw_text}
 
@@ -116,13 +116,13 @@ class ImageDataset(BaseImageDataset):
                     continue
 
                 if raw_title:
-                    raw_text = raw_title + ' [SEP] ' + ' [SEP] '.join(raw_tags)
+                    raw_text = raw_title + ' ' + ' '.join(raw_tags)
                 else:
-                    raw_text = ' [SEP] '.join(raw_tags)
+                    raw_text = ' '.join(raw_tags)
 
                 translated_title = translate(raw_title)
                 translated_tags = [translate(tag) for tag in raw_tags]
-                translated_text = (translated_title + ' [SEP] ' if translated_title else '') + ' [SEP] '.join(translated_tags)
+                translated_text = (translated_title + ' ' if translated_title else '') + ' '.join(translated_tags)
 
                 self.image_paths.append(img_file)
                 self.image_to_tags[img_file] = {'raw_text': raw_text, 'translated_text': translated_text}
