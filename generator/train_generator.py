@@ -39,7 +39,8 @@ def train_generator(args):
         writer = summary_writer(args)
 
     if args.resume:
-        start_epoch, best_loss = load_checkpoint(image_generator, optimizer, Path(args.output_dir), 'generator_unet')
+        _, _, image_generator.unet = load_checkpoint(image_generator.unet, device, optimizer, Path(args.output_dir), 'generator_unet')
+        start_epoch, best_loss, image_generator.text_encoder = load_checkpoint(image_generator.text_encoder, device, optimizer, Path(args.output_dir), 'generator_text_encoder')
     else:
         start_epoch, best_loss = 1, float('inf')
 
@@ -75,14 +76,14 @@ def train_generator(args):
 
             if args.local_rank == 0 and writer is not None:
                 global_step += 1
-                if global_step % 100 == 0:
-                    writer.add_scalar('Loss/generatpr_step', loss.item(), global_step)
+                if global_step % 200 == 0:
+                    writer.add_scalar('Loss/generator_step', loss.item(), global_step)
 
         avg_loss = total_loss / len(dataloader)
         if args.local_rank == 0 and avg_loss < best_loss:
             best_loss = avg_loss
-            save_model(image_generator.module.unet, 'unet', Path(args.output_dir))
-            save_model(image_generator.module.text_encoder, 'text_encoder', Path(args.output_dir))
+            save_weights(image_generator.module.unet, 'unet', Path(args.output_dir))
+            save_weights(image_generator.module.text_encoder, 'text_encoder', Path(args.output_dir))
             print(f'[Epoch {epoch}] Generator saved with loss {avg_loss:.4f}', flush=True)
 
         if args.local_rank == 0:
@@ -94,6 +95,7 @@ def train_generator(args):
                 epoch,
                 image_generator.module.text_encoder,
                 optimizer, best_loss, Path(args.output_dir), 'generator_text_encoder')
+            writer.add_scalar('Loss/generator_epoch', avg_loss, epoch)
 
     cleanup()
 
@@ -106,7 +108,7 @@ def main():
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--local_rank", type=int, default=os.environ.get("LOCAL_RANK", 0))
     parser.add_argument("--resume", action='store_true')

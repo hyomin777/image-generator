@@ -16,17 +16,18 @@ def save_checkpoint(epoch, model, optimizer, best_loss, output_dir: Path, checkp
     print(f'Checkpoint saved at epoch {epoch}')
 
 
-def load_checkpoint(model, optimizer, output_dir: Path, checkpoint_name):
+def load_checkpoint(model, device, optimizer, output_dir: Path, checkpoint_name):
     checkpoint_path = output_dir / f'checkpoints/{checkpoint_name}.pth'
     if checkpoint_path.exists():
-        checkpoint = torch.load(checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
         model.load_state_dict(checkpoint['model_state_dict'])
+        model.to(device)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
         best_loss = checkpoint['best_loss']
         print(f'Checkpoint loaded from epoch {checkpoint["epoch"]}')
-        return start_epoch, best_loss
-    return 1, float('inf')
+        return start_epoch, best_loss, model
+    return 1, float('inf'), model
 
 
 def save_weights(model, save_name, output_dir: Path):
