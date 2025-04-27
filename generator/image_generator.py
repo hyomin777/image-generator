@@ -104,7 +104,7 @@ class ImageGenerator(nn.Module):
         noise_pred = self.unet(noisy_latent, t.to(self.dtype), encoder_hidden_states=text_embed).sample
 
         loss = F.mse_loss(noise_pred, noise)
-        if loss.item() > 2.0:
+        if loss.item() > 0.5:
             print(f"[train_step] loss too high! {loss.item():.4f}")
             return None
         return loss
