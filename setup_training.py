@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 import torch.optim as optim
+import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
@@ -12,6 +13,17 @@ from encoder.text_encoder import TextEncoder
 
 from utils.collate_fn import skip_broken_collate_fn
 from encoder.image_encoder import load_image_encoder
+
+
+def setup():
+    rank = int(os.environ['RANK'])
+    world_size = int(os.environ['WORLD_SIZE'])
+
+    dist.init_process_group('nccl', rank=rank, world_size=world_size)
+
+
+def cleanup():
+    dist.destroy_process_group()
 
 
 def setup_train_dataloader(args, dataset_cls:BaseImageDataset):

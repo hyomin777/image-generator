@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler
-from diffusers.models.attention_processor import AttnProcessor
 from encoder.text_encoder import TextEncoder
 from tokenizer.tokenizer import load_tokenizer
 

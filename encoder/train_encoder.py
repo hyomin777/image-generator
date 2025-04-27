@@ -11,11 +11,10 @@ from tqdm import tqdm
 from dataset import RefinedImageDataset
 from tokenizer.tokenizer import load_tokenizer
 from loss import cosine_contrastive_loss
-from utils.ddp import setup, cleanup
 from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
 from utils.logging import log_text_image_embeddings
 from utils.save_model import save_checkpoint, load_checkpoint, save_weights
-from train import setup_train_dataloader, initialize_encoders, wrap_model, summary_writer
+from setup_training import setup, cleanup, setup_train_dataloader, initialize_encoders, wrap_model, summary_writer
 
 
 def train_anchor(args):
@@ -30,8 +29,8 @@ def train_anchor(args):
         writer = summary_writer(args)
 
     if args.resume:
-        _, _ = load_checkpoint(text_encoder, optimizer, Path(args.output_dir), 'text_encoder')
-        start_epoch, best_loss = load_checkpoint(image_encoder, optimizer, Path(args.output_dir), 'image_encoder')
+        _, _ = load_checkpoint(text_encoder, device, optimizer, Path(args.output_dir), 'text_encoder')
+        start_epoch, best_loss = load_checkpoint(image_encoder, device, optimizer, Path(args.output_dir), 'image_encoder')
     else:
         start_epoch, best_loss = 1, float('inf')
 
@@ -67,9 +66,8 @@ def train_anchor(args):
             attention_mask_raw = tokenized_raw.attention_mask.to(device)
 
             image_embeds = image_encoder.module.get_image_features(pixel_values=images)
-            print(f'Image embeds Shape: {image_embeds.shape}')
             raw_text_embeds = text_encoder(input_ids=input_ids_raw, attention_mask=attention_mask_raw)
-            print(f'Text embeds Shape {raw_text_embeds.shape}')
+
             loss = cosine_contrastive_loss(raw_text_embeds, image_embeds)
             optimizer.zero_grad()
             loss.backward()
@@ -124,7 +122,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--num_workers", type=int, default=6)
     parser.add_argument("--local_rank", type=int, default=os.environ.get("LOCAL_RANK", 0))
     parser.add_argument("--resume", action='store_true')
     args = parser.parse_args()

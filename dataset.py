@@ -5,7 +5,6 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 from utils.translator import load_cache, translate
-from transform.transform import normalize, color_jitter
 
 Image.MAX_IMAGE_PIXELS = None
 

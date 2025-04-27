@@ -13,10 +13,9 @@ from tqdm import tqdm
 
 from image_generator import ImageGenerator
 from dataset import RefinedImageDataset
-from utils.ddp import setup, cleanup
 from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
 from utils.save_model import save_checkpoint, load_checkpoint, save_weights
-from train import summary_writer, setup_train_dataloader, wrap_model
+from setup_training import setup, cleanup, summary_writer, setup_train_dataloader, wrap_model
 
 
 def train_generator(args):
@@ -120,9 +119,9 @@ def main():
     parser.add_argument("--text_encoder_path", type=str, default="output/weights/text_encoder.pth")
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--num_workers", type=int, default=6)
     parser.add_argument("--local_rank", type=int, default=os.environ.get("LOCAL_RANK", 0))
     parser.add_argument("--resume", action='store_true')
     args = parser.parse_args()
