@@ -33,11 +33,11 @@ class ImageGenerator(nn.Module):
 
         self.vae.requires_grad_(False)
 
-    def encode_text(self, text):
+    def encode_text(self, text, padding='max_length'):
         if isinstance(text, str):
             text = [text]
         text_inputs = self.tokenizer(
-            text, padding=True, max_length=128,
+            text, padding=padding, max_length=128,
             truncation=True, return_tensors="pt"
         )
         attention_mask = text_inputs.attention_mask.to(self.device)
@@ -85,13 +85,28 @@ class ImageGenerator(nn.Module):
         with torch.no_grad():
             latent = self.vae.encode(image.to(self.device, self.dtype)).latent_dist.sample()
             latent = latent * 0.18215
+
+            latent_mean = latent.mean().item()
+            latent_std = latent.std().item()
+            if torch.isnan(latent).any() or torch.isinf(latent).any():
+                print(f"[Warning] NaN or INF detected in latent! mean={latent_mean:.6f}, std={latent_std:.6f}")
+                return None
+
+            if latent_std > 3.0 or latent_std < 0.3:
+                print(f"[train_step] Abnormal latent std detected! mean={latent_mean:.6f}, std={latent_std:.6f}")
+                return None
+
         bsz = latent.shape[0]
         t = torch.randint(0, self.scheduler.config.num_train_timesteps, (bsz,), device=self.device).long()
         noise = torch.randn_like(latent)
         noisy_latent = self.scheduler.add_noise(latent, noise, t)
-        text_embed = self.encode_text(text)
+        text_embed = self.encode_text(text, 'longest')
         noise_pred = self.unet(noisy_latent, t.to(self.dtype), encoder_hidden_states=text_embed).sample
+
         loss = F.mse_loss(noise_pred, noise)
+        if loss.item() > 2.0:
+            print(f"[train_step] loss too high! {loss.item():.4f}")
+            return None
         return loss
 
 

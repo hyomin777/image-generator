@@ -53,6 +53,7 @@ def train_generator(args):
         total_loss = 0.0
         dataloader.sampler.set_epoch(epoch)
         progress_bar = tqdm(dataloader, desc=f"[GPU {args.local_rank}] Epoch {epoch}", disable=(args.local_rank != 0))
+        num_skipped_batches = 0
 
         for batch in dataloader:
             if batch is None:
@@ -65,6 +66,11 @@ def train_generator(args):
             raw_text = [t['raw_text'] for t in batch["text"]]
 
             loss = image_generator.module.train_step(images, raw_text)
+            if loss is None:
+                num_skipped_batches += 1
+                progress_bar.update(1)
+                continue
+
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(image_generator.parameters(), max_norm=1.0)
@@ -87,6 +93,7 @@ def train_generator(args):
             print(f'[Epoch {epoch}] Generator saved with loss {avg_loss:.4f}', flush=True)
 
         if args.local_rank == 0:
+            print(f"[Epoch {epoch}] Skipped {num_skipped_batches} batches due to NaN or INF")
             save_checkpoint(
                 epoch,
                 image_generator.module.unet,
