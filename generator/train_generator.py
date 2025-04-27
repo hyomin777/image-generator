@@ -52,8 +52,9 @@ def train_generator(args):
         total_loss = 0.0
         dataloader.sampler.set_epoch(epoch)
         progress_bar = tqdm(dataloader, desc=f"[GPU {args.local_rank}] Epoch {epoch}", disable=(args.local_rank != 0))
+        
         num_skipped_batches = 0
-
+        last_loss_value = None
         for batch in dataloader:
             if batch is None:
                 progress_bar.update(1)
@@ -69,6 +70,15 @@ def train_generator(args):
                 num_skipped_batches += 1
                 progress_bar.update(1)
                 continue
+
+
+            if last_loss_value is not None:
+                if loss.item() > last_loss_value * 1.5:
+                    print(f"[Loss Jump] Loss jumped! Last: {last_loss_value:.4f} → Now: {loss.item():.4f}")
+                    num_skipped_batches += 1
+                    progress_bar.update(1)
+                    continue
+            last_loss_value = loss.item()
 
             optimizer.zero_grad()
             loss.backward()
