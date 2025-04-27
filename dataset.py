@@ -20,15 +20,40 @@ class BaseImageDataset(Dataset):
 
         if is_train:
             self.transform = transforms.Compose([
-                transforms.RandomResizedCrop(size=(224, 224), scale=(0.7, 1.0), ratio=(0.8, 1.2)),
+                transforms.Resize((224, 224)),
+                transforms.RandomApply([
+                    transforms.RandomResizedCrop(
+                        size=(224, 224),
+                        scale=(0.8, 1.0),
+                        ratio=(0.8, 1.2)
+                    )
+                ], p=0.8),
+                transforms.RandomApply([
+                    transforms.ColorJitter(
+                        brightness=0.05,
+                        contrast=0.05,
+                        saturation=0.05,
+                        hue=0.02
+                    )
+                ], p=0.5),
+                transforms.RandomApply([
+                    transforms.RandomRotation(15)
+                ], p=0.5),
                 transforms.RandomHorizontalFlip(p=0.5),
-                transforms.RandomRotation(30),
-                transforms.ToTensor()
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.48145466, 0.4578275, 0.40821073],
+                    std=[0.26862954, 0.26130258, 0.27577711]
+                )
              ])
         else:
             self.transform = transforms.Compose([
                 transforms.Resize((224, 224)),
-                transforms.ToTensor()
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.48145466, 0.4578275, 0.40821073],
+                    std=[0.26862954, 0.26130258, 0.27577711]
+                )
             ])
 
         self._map_tag_to_image()
@@ -57,12 +82,6 @@ class BaseImageDataset(Dataset):
             return None
 
         image = self.transform(image)
-        image = color_jitter(image, 0.1, 0.1, 0.1, 0.05)
-        image = normalize(
-            image,
-            mean=[0.48145466, 0.4578275, 0.40821073],
-            std=[0.26862954, 0.26130258, 0.27577711]
-        )
         text = self.image_to_tags[img_name]
         return {"image": image, "text": text}
 
