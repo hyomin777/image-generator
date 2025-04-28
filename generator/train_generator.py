@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from image_generator import ImageGenerator
 from dataset import RefinedImageDataset, LMDBImageDataset
-from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
+from utils.temp_manager import wait_for_cooldown
 from utils.save_model import save_checkpoint, load_checkpoint, save_weights
 from setup_training import setup, cleanup, summary_writer, setup_train_dataloader, wrap_model
 
@@ -64,6 +64,9 @@ def train_generator(args):
             if batch is None:
                 progress_bar.update(1)
                 continue
+
+            if global_step % 50 == 0:
+                wait_for_cooldown(gpu_id=args.local_rank)
 
             images = batch["image"].to(device)
             raw_text = [t['raw_text'] for t in batch["text"]]
