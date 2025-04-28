@@ -32,6 +32,9 @@ def train_generator(args):
     params_to_optimize = [p for p in image_generator.parameters() if p.requires_grad]
     optimizer = optim.AdamW(params_to_optimize, lr=args.lr)
 
+    # Mixed Precision scaler
+    scaler = torch.GradScaler(device.type)
+
     # tensorboard writer
     writer = None
     if args.local_rank == 0:
@@ -52,7 +55,7 @@ def train_generator(args):
         total_loss = 0.0
         dataloader.sampler.set_epoch(epoch)
         progress_bar = tqdm(dataloader, desc=f"[GPU {args.local_rank}] Epoch {epoch}", disable=(args.local_rank != 0))
-        
+
         num_skipped_batches = 0
         last_loss_value = None
         for batch in dataloader:
@@ -65,7 +68,11 @@ def train_generator(args):
             images = batch["image"].to(device)
             raw_text = [t['raw_text'] for t in batch["text"]]
 
-            loss = image_generator.module.train_step(images, raw_text)
+            optimizer.zero_grad()
+
+            with torch.autocast(device.type):
+                loss = image_generator.module.train_step(images, raw_text)
+
             if loss is None:
                 num_skipped_batches += 1
                 progress_bar.update(1)
@@ -73,10 +80,10 @@ def train_generator(args):
 
             last_loss_value = loss.item()
 
-            optimizer.zero_grad()
-            loss.backward()
+            scaler.scale(loss).backward()
             torch.nn.utils.clip_grad_norm_(image_generator.parameters(), max_norm=0.5)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             total_loss += loss.item()
             progress_bar.update(1)
