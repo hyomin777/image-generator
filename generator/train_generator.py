@@ -37,9 +37,9 @@ def train_generator(args):
     if args.local_rank == 0:
         writer = summary_writer(args)
 
-    if args.resume:
-        _, _, image_generator.unet = load_checkpoint(image_generator.unet, device, optimizer, Path(args.output_dir), 'generator_unet')
-        start_epoch, best_loss, image_generator.text_encoder = load_checkpoint(image_generator.text_encoder, device, optimizer, Path(args.output_dir), 'generator_text_encoder')
+    if args.resume_epoch:
+        _, _, image_generator.unet = load_checkpoint(image_generator.unet, device, optimizer, Path(args.output_dir), f'generator_unet_{args.resume_epoch}')
+        start_epoch, best_loss, image_generator.text_encoder = load_checkpoint(image_generator.text_encoder, device, optimizer, Path(args.output_dir), f'generator_text_encoder_{args.resume_epoch}')
     else:
         start_epoch, best_loss = 1, float('inf')
 
@@ -71,18 +71,11 @@ def train_generator(args):
                 progress_bar.update(1)
                 continue
 
-
-            if last_loss_value is not None:
-                if loss.item() > last_loss_value * 1.5:
-                    print(f"[Loss Jump] Loss jumped! Last: {last_loss_value:.4f} → Now: {loss.item():.4f}")
-                    num_skipped_batches += 1
-                    progress_bar.update(1)
-                    continue
             last_loss_value = loss.item()
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(image_generator.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(image_generator.parameters(), max_norm=0.5)
             optimizer.step()
 
             total_loss += loss.item()
@@ -106,13 +99,13 @@ def train_generator(args):
             save_checkpoint(
                 epoch,
                 image_generator.module.unet,
-                optimizer, best_loss, Path(args.output_dir), 'generator_unet')
+                optimizer, best_loss, Path(args.output_dir), f'generator_unet_{epoch}')
             save_checkpoint(
                 epoch,
                 image_generator.module.text_encoder,
-                optimizer, best_loss, Path(args.output_dir), 'generator_text_encoder')
+                optimizer, best_loss, Path(args.output_dir), f'generator_text_encoder_{epoch}')
             writer.add_scalar('Loss/generator_epoch', avg_loss, epoch)
-            
+
             image_generator.eval()
             with torch.no_grad():
                 sample_text = ['1girl black_shirt black_skirt blue_archive black_halo shiroko_(blue_archive)']
@@ -133,7 +126,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num_workers", type=int, default=6)
     parser.add_argument("--local_rank", type=int, default=os.environ.get("LOCAL_RANK", 0))
-    parser.add_argument("--resume", action='store_true')
+    parser.add_argument("--resume_epoch", type=int)
     args = parser.parse_args()
 
     train_generator(args)
