@@ -12,7 +12,7 @@ from dataset import RefinedImageDataset
 from tokenizer.tokenizer import load_tokenizer
 from loss import cosine_contrastive_loss
 from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
-from utils.logging import log_text_image_embeddings
+from utils.tensorboard_logging import log_text_image_embeddings
 from utils.save_model import save_checkpoint, load_checkpoint, save_weights
 from setup_training import setup, cleanup, setup_train_dataloader, initialize_encoders, wrap_model, summary_writer
 

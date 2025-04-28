@@ -12,7 +12,7 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from image_generator import ImageGenerator
-from dataset import RefinedImageDataset
+from dataset import RefinedImageDataset, LMDBImageDataset
 from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
 from utils.save_model import save_checkpoint, load_checkpoint, save_weights
 from setup_training import setup, cleanup, summary_writer, setup_train_dataloader, wrap_model
@@ -26,7 +26,7 @@ def train_generator(args):
     image_generator = ImageGenerator(device, args.tokenizer_path)
 
     # dataset
-    dataloader = setup_train_dataloader(args, RefinedImageDataset)
+    dataloader = setup_train_dataloader(args, LMDBImageDataset)
 
     # optimizer
     params_to_optimize = [p for p in image_generator.parameters() if p.requires_grad]
@@ -42,9 +42,11 @@ def train_generator(args):
 
     if args.resume_epoch:
         _, _, image_generator.unet = load_checkpoint(image_generator.unet, device, optimizer, Path(args.output_dir), f'generator_unet_{args.resume_epoch}')
-        start_epoch, best_loss, image_generator.text_encoder = load_checkpoint(image_generator.text_encoder, device, optimizer, Path(args.output_dir), f'generator_text_encoder_{args.resume_epoch}')
+        _, best_loss, image_generator.text_encoder = load_checkpoint(image_generator.text_encoder, device, optimizer, Path(args.output_dir), f'generator_text_encoder_{args.resume_epoch}')
     else:
-        start_epoch, best_loss = 1, float('inf')
+        best_loss = 1
+
+    start_epoch = 2
 
     image_generator = wrap_model(args.local_rank, image_generator)
 
@@ -62,8 +64,6 @@ def train_generator(args):
             if batch is None:
                 progress_bar.update(1)
                 continue
-            if get_gpu_temp(args.local_rank) >= 80:
-                wait_for_cooldown(args.local_rank)
 
             images = batch["image"].to(device)
             raw_text = [t['raw_text'] for t in batch["text"]]
@@ -124,7 +124,7 @@ def train_generator(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="/mnt/usb/refined_images")
+    parser.add_argument("--data_dir", type=str, default="/mnt/hhd/dataset")
     parser.add_argument("--tokenizer_path", type=str, default="tokenizer/tokenizer.json")
     parser.add_argument("--text_encoder_path", type=str, default="output/weights/text_encoder.pth")
     parser.add_argument("--output_dir", type=str, default="output")

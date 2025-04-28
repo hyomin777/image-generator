@@ -8,7 +8,6 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 
-from dataset import BaseImageDataset
 from encoder.text_encoder import TextEncoder
 
 from utils.collate_fn import skip_broken_collate_fn
@@ -26,7 +25,7 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def setup_train_dataloader(args, dataset_cls:BaseImageDataset):
+def setup_train_dataloader(args, dataset_cls):
     dataset = dataset_cls(Path(args.data_dir))
     sampler = DistributedSampler(dataset, num_replicas=torch.cuda.device_count(), rank=args.local_rank)
     dataloader = DataLoader(

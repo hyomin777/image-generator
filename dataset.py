@@ -1,4 +1,7 @@
 import os
+import io
+import lmdb
+import pickle
 import json
 from pathlib import Path
 from PIL import Image
@@ -161,3 +164,74 @@ class ImageDataset(BaseImageDataset):
                 continue
 
         print(f"Filtered {len(self.image_paths)} images total")
+
+
+class LMDBImageDataset(Dataset):
+    def __init__(self, lmdb_dir: Path, is_train=True):
+        self.lmdb_dir = lmdb_dir
+
+        self.env = lmdb.open(
+            str(self.lmdb_dir),
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+            max_readers=32
+        )
+
+        with self.env.begin(write=False) as txn:
+            self.length = txn.stat()['entries'] // 2
+
+        if is_train:
+            self.transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.RandomApply([
+                    transforms.RandomResizedCrop(
+                        size=(224, 224),
+                        scale=(0.8, 1.0),
+                        ratio=(0.8, 1.2)
+                    )
+                ], p=0.8),
+                transforms.RandomApply([
+                    transforms.ColorJitter(
+                        brightness=0.05,
+                        contrast=0.05,
+                        saturation=0.05,
+                        hue=0.02
+                    )
+                ], p=0.5),
+                transforms.RandomApply([
+                    transforms.RandomRotation(15)
+                ], p=0.5),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.48145466, 0.4578275, 0.40821073],
+                    std=[0.26862954, 0.26130258, 0.27577711]
+                )
+            ])
+        else:
+            self.transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.48145466, 0.4578275, 0.40821073],
+                    std=[0.26862954, 0.26130258, 0.27577711]
+                )
+            ])
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        with self.env.begin(write=False) as txn:
+            img_bytes = txn.get(f'image-{idx:08d}'.encode())
+            meta_bytes = txn.get(f'meta-{idx:08d}'.encode())
+
+        image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+        image = self.transform(image)
+
+        meta = pickle.loads(meta_bytes)
+        raw_text = meta['raw_text']
+
+        return {"image": image, "text": {'raw_text': raw_text}}
