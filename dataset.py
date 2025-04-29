@@ -228,10 +228,14 @@ class LMDBImageDataset(Dataset):
             img_bytes = txn.get(f'image-{idx:08d}'.encode())
             meta_bytes = txn.get(f'meta-{idx:08d}'.encode())
 
-        image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-        image = self.transform(image)
+        try:
+            image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+        except Exception as e:        #, 아예 에러를 터뜨리지 말고 넘어가게
+            return self.__getitem__((idx + 1) % len(self))  # 다음 인덱스로 넘어가기
 
         meta = pickle.loads(meta_bytes)
         raw_text = meta['raw_text']
 
-        return {"image": image, "text": {'raw_text': raw_text}}
+        image = self.transform(image)
+
+        return {"image": image, "text":{'raw_text': raw_text}}

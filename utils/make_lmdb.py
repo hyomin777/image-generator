@@ -34,10 +34,11 @@ def make_lmdb(image_dir, output_path, write_frequency=5000):
     metadata_dir = image_dir / 'metadata'
     files = [f for f in os.listdir(image_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
 
-    db = lmdb.open(str(output_path), map_size=600 * 1024 * 1024 * 1024)  # 600GB
+    db = lmdb.open(str(output_path), map_size=800 * 1024 * 1024 * 1024)  # 800GB
     txn = db.begin(write=True)
 
-    for idx, img_file in enumerate(tqdm.tqdm(files)):
+    idx = 0
+    for img_file in tqdm.tqdm(files):
         img_path = image_dir / img_file
         metadata_path = metadata_dir / (Path(img_file).stem + '.json')
 
@@ -65,6 +66,8 @@ def make_lmdb(image_dir, output_path, write_frequency=5000):
         txn.put(key_img, img_encoded)
         txn.put(key_meta, meta_encoded)
 
+        idx += 1
+
         if idx % write_frequency == 0:
             txn.commit()
             print(f'commited at idx: {idx}')
@@ -72,7 +75,7 @@ def make_lmdb(image_dir, output_path, write_frequency=5000):
 
     txn.commit()
     db.close()
-    print(f"Finished LMDB dataset with {len(files)} images.")
+    print(f"Finished LMDB dataset with {idx} images.")
 
 if __name__ == "__main__":
     import argparse
