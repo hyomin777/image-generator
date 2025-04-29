@@ -25,15 +25,16 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def setup_train_dataloader(args, dataset_cls):
+def setup_train_dataloader(args, dataset_cls, accelerator):
     dataset = dataset_cls(Path(args.data_dir))
-    sampler = DistributedSampler(dataset, num_replicas=torch.cuda.device_count(), rank=args.local_rank)
+    sampler = DistributedSampler(dataset, num_replicas=accelerator.num_processes, rank=accelerator.process_index, shuffle=True)
     dataloader = DataLoader(
         dataset,
         sampler=sampler,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=True,
+        drop_last=True,
         collate_fn=skip_broken_collate_fn
     )
     return dataloader

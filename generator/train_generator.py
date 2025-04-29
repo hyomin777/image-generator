@@ -66,7 +66,7 @@ def train_generator(args):
             if global_step % 50 == 0:
                 wait_for_cooldown(gpu_id=args.local_rank)
 
-            images = batch["image"].to(device)
+            images = batch["image"]
             raw_text = [t['raw_text'] for t in batch["text"]]
 
             optimizer.zero_grad()
