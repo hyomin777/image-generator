@@ -16,7 +16,6 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from image_generator import ImageGenerator
 from dataset import LMDBImageDataset
 from utils.temp_manager import wait_for_cooldown
-from utils.save_model import save_weights, load_checkpoint
 from setup_training import summary_writer, setup_train_dataloader
 
 
@@ -33,7 +32,7 @@ def save_fsdp_weights(model, name, output_dir):
 
     if torch.distributed.get_rank() == 0:
         torch.save(state_dict, save_path)
-        print(f"[FSDP SAVE] {save_path} 저장 완료")
+        print(f"[FSDP SAVE] {save_path}")
 
 
 def train_generator(args):
@@ -48,9 +47,6 @@ def train_generator(args):
 
     # Model
     image_generator = ImageGenerator(device, args.tokenizer_path)
-    _, _, image_generator.unet = load_checkpoint(image_generator.unet, device, Path(args.output_dir), f'generator_unet_2')
-    _, _, image_generator.text_encoder = load_checkpoint(image_generator.text_encoder, device, Path(args.output_dir), f'generator_text_encoder_2')
-
     image_generator.unet = FSDP(image_generator.unet)
     image_generator.text_encoder = FSDP(image_generator.text_encoder)
 
@@ -74,10 +70,12 @@ def train_generator(args):
     else:
         writer = None
 
+    # Resume
     if args.resume:
         accelerator.load_state(args.resume)
 
 
+    # Train Loop
     global_step = 1
     best_loss = 1
 
