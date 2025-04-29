@@ -10,7 +10,7 @@ import torch
 from torchvision.utils import make_grid
 from tqdm import tqdm
 from accelerate import Accelerator, FullyShardedDataParallelPlugin
-from torch.distributed.fsdp.fully_sharded_data_parallel import FullOptimStateDictConfig, FullStateDictConfig
+from torch.distributed.fsdp.fully_sharded_data_parallel import FullOptimStateDictConfig, FullStateDictConfig, StateDictType
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 from image_generator import ImageGenerator
@@ -20,10 +20,27 @@ from utils.save_model import save_weights, load_checkpoint
 from setup_training import summary_writer, setup_train_dataloader
 
 
+def save_fsdp_weights(model, name, output_dir):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_path = output_dir / f"{name}.pth"
+
+    with FSDP.state_dict_type(
+        model,
+        state_dict_type=StateDictType.FULL_STATE_DICT,
+        state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+    ):
+        state_dict = model.state_dict()
+
+    if torch.distributed.get_rank() == 0:
+        torch.save(state_dict, save_path)
+        print(f"[FSDP SAVE] {save_path} 저장 완료")
+
+
 def train_generator(args):
     fsdp_plugin = FullyShardedDataParallelPlugin(
-        state_dict_config=FullStateDictConfig(offload_to_cpu=False, rank0_only=False),
-        optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=False, rank0_only=False),
+        state_dict_type = "FULL_STATE_DICT",
+        state_dict_config = FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
+        optim_state_dict_config = FullOptimStateDictConfig(offload_to_cpu=False, rank0_only=True),
         auto_wrap_policy = lambda m, *_: False,
     )
     accelerator = Accelerator(fsdp_plugin=fsdp_plugin)
@@ -31,14 +48,21 @@ def train_generator(args):
 
     # Model
     image_generator = ImageGenerator(device, args.tokenizer_path)
-
     _, _, image_generator.unet = load_checkpoint(image_generator.unet, device, Path(args.output_dir), f'generator_unet_2')
     _, _, image_generator.text_encoder = load_checkpoint(image_generator.text_encoder, device, Path(args.output_dir), f'generator_text_encoder_2')
 
-    image_generator.unet = FSDP(image_generator.unet, use_orig_params=True)
-    image_generator.text_encoder = FSDP(image_generator.text_encoder, use_orig_params=True)
+    image_generator.unet = FSDP(image_generator.unet)
+    image_generator.text_encoder = FSDP(image_generator.text_encoder)
+
     # Dataset & Dataloader
     dataloader = setup_train_dataloader(args, LMDBImageDataset, accelerator)
+
+    unet_fsdp, text_encoder_fsdp, dataloader = accelerator.prepare(
+        image_generator.unet, image_generator.text_encoder, dataloader
+    )
+    image_generator.vae.to(device, dtype=torch.float32)
+    image_generator.text_encoder = text_encoder_fsdp
+    image_generator.unet = unet_fsdp
 
     # Optimizer
     params_to_optimize = [p for p in image_generator.parameters() if p.requires_grad]
@@ -53,12 +77,6 @@ def train_generator(args):
     if args.resume:
         accelerator.load_state(args.resume)
 
-    unet_fsdp, text_encoder_fsdp, optimizer, dataloader = accelerator.prepare(
-        image_generator.unet, image_generator.text_encoder, optimizer, dataloader
-    )
-    image_generator.vae.to(device, dtype=torch.float32)
-    image_generator.text_encoder = text_encoder_fsdp
-    image_generator.unet = unet_fsdp
 
     global_step = 1
     best_loss = 1
@@ -98,21 +116,18 @@ def train_generator(args):
             total_loss += loss.item()
             progress_bar.set_postfix({"loss": loss.item()})
 
-            if accelerator.is_main_process and global_step % 200 == 0:
+            if accelerator.is_main_process and global_step % 100 == 0:
                 writer.add_scalar('Loss/generator_step', loss.item(), global_step)
-
             global_step += 1
 
         avg_loss = total_loss / len(dataloader)
-
         if accelerator.is_main_process:
             accelerator.save_state(os.path.join(args.output_dir, f"generator_{epoch}"))
             writer.add_scalar('Loss/generator_epoch', avg_loss, epoch)
-
             if avg_loss < best_loss:
                 best_loss = avg_loss
-                save_weights(image_generator.unet, 'unet', Path(args.output_dir))
-                save_weights(image_generator.text_encoder, 'text_encoder', Path(args.output_dir))
+                save_fsdp_weights(image_generator.unet, 'unet', Path(args.output_dir))
+                save_fsdp_weights(image_generator.text_encoder, 'text_encoder', Path(args.output_dir))
 
             image_generator.eval()
             with torch.no_grad():
@@ -120,6 +135,7 @@ def train_generator(args):
                 generated_image = image_generator(sample_text)
                 grid = make_grid(generated_image, nrow=1)
                 writer.add_image(f'Generated/Epoch_{epoch}', grid, epoch)
+
 
 
 if __name__ == "__main__":
@@ -135,4 +151,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     train_generator(args)
-
