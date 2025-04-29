@@ -42,16 +42,14 @@ def train_generator(args):
 
     if args.resume_epoch:
         _, _, image_generator.unet = load_checkpoint(image_generator.unet, device, optimizer, Path(args.output_dir), f'generator_unet_{args.resume_epoch}')
-        _, best_loss, image_generator.text_encoder = load_checkpoint(image_generator.text_encoder, device, optimizer, Path(args.output_dir), f'generator_text_encoder_{args.resume_epoch}')
+        start_epoch, best_loss, image_generator.text_encoder = load_checkpoint(image_generator.text_encoder, device, optimizer, Path(args.output_dir), f'generator_text_encoder_{args.resume_epoch}')
     else:
-        best_loss = 1
-
-    start_epoch = 2
+       start_epoch, best_loss = 1, float('inf')
 
     image_generator = wrap_model(args.local_rank, image_generator)
 
     # train loop
-    global_step = (start_epoch - 1) * len(dataloader)
+    global_step = max(1, (start_epoch - 1) * len(dataloader))
     for epoch in range(start_epoch, args.epochs + 1):
         image_generator.train()
         total_loss = 0.0
