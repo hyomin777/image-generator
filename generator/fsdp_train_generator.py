@@ -3,149 +3,183 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 
+
 import argparse
 from pathlib import Path
-
+from functools import partial
 import torch
+import torch.distributed as dist
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.fully_sharded_data_parallel import (
+    FullStateDictConfig, FullOptimStateDictConfig, StateDictType
+)
+from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 from tqdm import tqdm
-from accelerate import Accelerator, FullyShardedDataParallelPlugin
-from torch.distributed.fsdp.fully_sharded_data_parallel import FullOptimStateDictConfig, FullStateDictConfig, StateDictType
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
-from image_generator import ImageGenerator
 from dataset import LMDBImageDataset
-from utils.temp_manager import wait_for_cooldown
-from setup_training import summary_writer, setup_train_dataloader
+from image_generator import ImageGenerator
+from utils.collate_fn import skip_broken_collate_fn
+from torch.nn import TransformerEncoderLayer
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-def save_fsdp_weights(model, name, output_dir):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    save_path = output_dir / f"{name}.pth"
+def fsdp_main(rank, world_size, args):
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+    device = torch.device("cuda", rank)
 
-    with FSDP.state_dict_type(
-        model,
-        state_dict_type=StateDictType.FULL_STATE_DICT,
-        state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-    ):
-        state_dict = model.state_dict()
-
-    if torch.distributed.get_rank() == 0:
-        torch.save(state_dict, save_path)
-        print(f"[FSDP SAVE] {save_path}")
-
-
-def train_generator(args):
-    fsdp_plugin = FullyShardedDataParallelPlugin(
-        state_dict_type = "FULL_STATE_DICT",
-        state_dict_config = FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
-        optim_state_dict_config = FullOptimStateDictConfig(offload_to_cpu=False, rank0_only=True),
-        auto_wrap_policy = lambda m, *_: False,
+    auto_wrap_policy = partial(
+        size_based_auto_wrap_policy,
+        min_num_params=int(1e6),
+        force_leaf_modules={TransformerEncoderLayer}
     )
-    accelerator = Accelerator(fsdp_plugin=fsdp_plugin)
-    device = accelerator.device
+    model = ImageGenerator(device, args.tokenizer_path)
+    model.vae.to(device)
+    model.unet = FSDP(model.unet.to(device), auto_wrap_policy=auto_wrap_policy)
+    model.text_encoder = FSDP(model.text_encoder.to(device), auto_wrap_policy=auto_wrap_policy)
 
-    # Model
-    image_generator = ImageGenerator(device, args.tokenizer_path)
-    image_generator.unet = FSDP(image_generator.unet)
-    image_generator.text_encoder = FSDP(image_generator.text_encoder)
+    model = model.to(device)
 
-    # Dataset & Dataloader
-    dataloader = setup_train_dataloader(args, LMDBImageDataset, accelerator)
-
-    unet_fsdp, text_encoder_fsdp, dataloader = accelerator.prepare(
-        image_generator.unet, image_generator.text_encoder, dataloader
-    )
-    image_generator.vae.to(device, dtype=torch.float32)
-    image_generator.text_encoder = text_encoder_fsdp
-    image_generator.unet = unet_fsdp
+    # Dataloader
+    dataset = LMDBImageDataset(args.data_dir)
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
+    dataloader = DataLoader(dataset, sampler=sampler, batch_size=args.batch_size, num_workers=args.num_workers, collate_fn=skip_broken_collate_fn)
 
     # Optimizer
-    params_to_optimize = [p for p in image_generator.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(params_to_optimize, lr=args.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     # TensorBoard
-    if accelerator.is_main_process:
-        writer = summary_writer(args)
-    else:
-        writer = None
+    writer = SummaryWriter(log_dir=Path(args.output_dir) / 'logs') if rank == 0 else None
 
-    # Resume
-    if args.resume:
-        accelerator.load_state(args.resume)
-
-
-    # Train Loop
     global_step = 1
     best_loss = 1
+    start_epoch = 1
 
-    for epoch in range(1, args.epochs + 1):
-        image_generator.train()
+    if args.resume and os.path.exists(args.resume):
+        map_location = {"cuda:%d" % 0: "cuda:%d" % rank}
+        checkpoint = torch.load(args.resume, map_location=map_location)
+
+        with FSDP.state_dict_type(model.unet, StateDictType.FULL_STATE_DICT,
+                                   FullStateDictConfig(offload_to_cpu=True, rank0_only=True)):
+            model.unet.load_state_dict(checkpoint["unet"])
+
+        with FSDP.state_dict_type(model.text_encoder, StateDictType.FULL_STATE_DICT,
+                                   FullStateDictConfig(offload_to_cpu=True, rank0_only=True)):
+            model.text_encoder.load_state_dict(checkpoint["text_encoder"])
+
+        with FSDP.state_dict_type(model, state_dict_type=StateDictType.FULL_STATE_DICT, state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
+                                   optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),):
+            optimizer.load_state_dict(checkpoint["optimizer"])
+
+        global_step = checkpoint["global_step"]
+        best_loss = checkpoint["best_loss"]
+        start_epoch = checkpoint["epoch"] + 1
+
+        if rank == 0:
+            print(f"[INFO] Resumed from {args.resume} at epoch {start_epoch}")
+
+
+    print(f"Rank={rank}, UNet param count: {sum(p.numel() for p in model.unet.parameters())}")
+    print(f"Rank={rank}, TextEncoder param count: {sum(p.numel() for p in model.text_encoder.parameters())}")
+    for epoch in range(start_epoch, args.epochs + 1):
+        model.train()
         total_loss = 0.0
+        sampler.set_epoch(epoch)
 
-        if hasattr(dataloader.sampler, "set_epoch"):
-            dataloader.sampler.set_epoch(epoch)
+        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch}", disable=rank != 0)
 
-        progress_bar = tqdm(dataloader, disable=not accelerator.is_main_process, desc=f"Epoch {epoch}")
-
-        for batch in progress_bar:
+        for batch in dataloader:
             if batch is None:
                 continue
 
-            if global_step % 50 == 0:
-                wait_for_cooldown(gpu_id=accelerator.local_process_index)
-
             images = batch["image"]
-            raw_text = [t['raw_text'] for t in batch["text"]]
+            raw_text = raw_text = [t['raw_text'] for t in batch["text"]]
 
-            with accelerator.autocast():
-                loss = image_generator.train_step(images, raw_text)
-
+            with torch.autocast(device.type):
+                loss = model.train_step(images, raw_text)
             if loss is None:
+                progress_bar.update(1)
                 continue
 
             optimizer.zero_grad()
-            accelerator.backward(loss)
-
-            accelerator.unscale_gradients()
-            torch.nn.utils.clip_grad_norm_(image_generator.parameters(), max_norm=0.5)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
             total_loss += loss.item()
+            progress_bar.update(1)
             progress_bar.set_postfix({"loss": loss.item()})
 
-            if accelerator.is_main_process and global_step % 100 == 0:
-                writer.add_scalar('Loss/generator_step', loss.item(), global_step)
+            if rank == 0 and global_step % 100 == 0:
+                writer.add_scalar("Loss/generator_step", loss.item(), global_step)
             global_step += 1
 
         avg_loss = total_loss / len(dataloader)
-        if accelerator.is_main_process:
-            accelerator.save_state(os.path.join(args.output_dir, f"generator_{epoch}"))
-            writer.add_scalar('Loss/generator_epoch', avg_loss, epoch)
+        with FSDP.state_dict_type(
+            model.unet,
+            StateDictType.FULL_STATE_DICT,
+            FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        ):
+            unet_state = model.unet.state_dict()
+
+        with FSDP.state_dict_type(
+            model.text_encoder,
+            StateDictType.FULL_STATE_DICT,
+            FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        ):
+            text_encoder_state = model.text_encoder.state_dict()
+
+        with FSDP.state_dict_type(
+            model,
+            state_dict_type=StateDictType.FULL_STATE_DICT,
+            state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
+            optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),
+        ):
+            optimizer_state = optimizer.state_dict()
+
+        if rank == 0:
             if avg_loss < best_loss:
                 best_loss = avg_loss
-                save_fsdp_weights(image_generator.unet, 'unet', Path(args.output_dir))
-                save_fsdp_weights(image_generator.text_encoder, 'text_encoder', Path(args.output_dir))
+                torch.save(unet_state, os.path.join(args.output_dir, "unet.pth"))
+                torch.save(text_encoder_state, os.path.join(args.output_dir, "text_encoder.pth"))
 
-            image_generator.eval()
+            checkpoint = {
+                "unet": unet_state,
+                "text_encoder": text_encoder_state,
+                "optimizer": optimizer_state,
+                "global_step": global_step,
+                "best_loss": best_loss,
+                "epoch": epoch,
+            }
+            torch.save(checkpoint, os.path.join(args.output_dir, f"checkpoint_{epoch}.pt"))
+
+            model.eval()
             with torch.no_grad():
-                sample_text = ["1girl black_shirt black_skirt blue_archive black_halo shiroko_(blue_archive)"]
-                generated_image = image_generator(sample_text)
-                grid = make_grid(generated_image, nrow=1)
-                writer.add_image(f'Generated/Epoch_{epoch}', grid, epoch)
+                sample_text = ["1girl black_shirt blue_archive shiroko_(blue_archive)"]
+                gen = model(sample_text)
+                grid = make_grid(gen, nrow=1)
+                writer.add_image(f"Generated/Epoch_{epoch}", grid, epoch)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, required=True)
+    parser.add_argument("--tokenizer_path", type=str, required=True)
+    parser.add_argument("--output_dir", type=str, default="./output")
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--batch_size", type=int, default=42)
+    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--resume", type=str, default=None)
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="/mnt/hhd/dataset")
-    parser.add_argument("--tokenizer_path", type=str, default="tokenizer/tokenizer.json")
-    parser.add_argument("--output_dir", type=str, default="output")
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--num_workers", type=int, default=8)
-    parser.add_argument("--resume", type=str, default=None)
-    args = parser.parse_args()
+    args = parse_args()
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    fsdp_main(local_rank, world_size, args)
 
-    train_generator(args)

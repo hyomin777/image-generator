@@ -230,8 +230,8 @@ class LMDBImageDataset(Dataset):
 
         try:
             image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-        except Exception as e:        #, 아예 에러를 터뜨리지 말고 넘어가게
-            return self.__getitem__((idx + 1) % len(self))  # 다음 인덱스로 넘어가기
+        except Exception as e:
+            return self.__getitem__((idx + 1) % len(self))
 
         meta = pickle.loads(meta_bytes)
         raw_text = meta['raw_text']
