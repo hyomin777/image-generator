@@ -9,7 +9,7 @@ from pathlib import Path
 from functools import partial
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
 from torch.distributed.fsdp.fully_sharded_data_parallel import (
     FullStateDictConfig, FullOptimStateDictConfig, StateDictType
 )
@@ -37,20 +37,26 @@ def fsdp_main(rank, world_size, args):
         min_num_params=int(1e6),
         force_leaf_modules={TransformerEncoderLayer}
     )
+
+    mp_policy = MixedPrecision(
+        param_dtype=torch.float16,
+        reduce_dtype=torch.float16,
+        buffer_dtype=torch.float16,
+    )
+
     model = ImageGenerator(device, args.tokenizer_path)
     model.vae.to(device)
-    model.unet = FSDP(model.unet.to(device), auto_wrap_policy=auto_wrap_policy)
-    model.text_encoder = FSDP(model.text_encoder.to(device), auto_wrap_policy=auto_wrap_policy)
-
-    model = model.to(device)
+    model.text_encoder.to(device)
+    model.unet = FSDP(model.unet.to(device), auto_wrap_policy=auto_wrap_policy, mixed_precision=mp_policy)
 
     # Dataloader
     dataset = LMDBImageDataset(args.data_dir)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
     dataloader = DataLoader(dataset, sampler=sampler, batch_size=args.batch_size, num_workers=args.num_workers, collate_fn=skip_broken_collate_fn)
 
-    # Optimizer
+    # Optimizer & Scaler
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    scaler = torch.GradScaler(device.type)
 
     # TensorBoard
     writer = SummaryWriter(log_dir=Path(args.output_dir) / 'logs') if rank == 0 else None
@@ -63,28 +69,23 @@ def fsdp_main(rank, world_size, args):
         map_location = {"cuda:%d" % 0: "cuda:%d" % rank}
         checkpoint = torch.load(args.resume, map_location=map_location)
 
-        with FSDP.state_dict_type(model.unet, StateDictType.FULL_STATE_DICT,
-                                   FullStateDictConfig(offload_to_cpu=True, rank0_only=True)):
-            model.unet.load_state_dict(checkpoint["unet"])
-
-        with FSDP.state_dict_type(model.text_encoder, StateDictType.FULL_STATE_DICT,
-                                   FullStateDictConfig(offload_to_cpu=True, rank0_only=True)):
-            model.text_encoder.load_state_dict(checkpoint["text_encoder"])
-
         with FSDP.state_dict_type(model, state_dict_type=StateDictType.FULL_STATE_DICT, state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
                                    optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),):
-            optimizer.load_state_dict(checkpoint["optimizer"])
+            model.unet.load_state_dict(checkpoint["unet"])
+            model.text_encoder.load_state_dict(checkpoint["text_encoder"])
+#            optimizer.load_state_dict(checkpoint["optimizer"])
 
         global_step = checkpoint["global_step"]
         best_loss = checkpoint["best_loss"]
         start_epoch = checkpoint["epoch"] + 1
 
         if rank == 0:
-            print(f"[INFO] Resumed from {args.resume} at epoch {start_epoch}")
+            print(f"[INFO] Resumed from {args.resume} | epoch: {start_epoch} | step: {global_step} | loss: {best_loss}")
 
 
     print(f"Rank={rank}, UNet param count: {sum(p.numel() for p in model.unet.parameters())}")
     print(f"Rank={rank}, TextEncoder param count: {sum(p.numel() for p in model.text_encoder.parameters())}")
+    print(f"Rank={rank}, VAE param count: {sum(p.numel() for p in model.vae.parameters())}")
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         total_loss = 0.0
@@ -106,9 +107,10 @@ def fsdp_main(rank, world_size, args):
                 continue
 
             optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            scaler.step(optimizer)
+            scaler.update()
 
             total_loss += loss.item()
             progress_bar.update(1)
@@ -119,19 +121,6 @@ def fsdp_main(rank, world_size, args):
             global_step += 1
 
         avg_loss = total_loss / len(dataloader)
-        with FSDP.state_dict_type(
-            model.unet,
-            StateDictType.FULL_STATE_DICT,
-            FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-        ):
-            unet_state = model.unet.state_dict()
-
-        with FSDP.state_dict_type(
-            model.text_encoder,
-            StateDictType.FULL_STATE_DICT,
-            FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-        ):
-            text_encoder_state = model.text_encoder.state_dict()
 
         with FSDP.state_dict_type(
             model,
@@ -139,6 +128,9 @@ def fsdp_main(rank, world_size, args):
             state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
             optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),
         ):
+
+            unet_state = model.unet.state_dict()
+            text_encoder_state = model.text_encoder.state_dict()
             optimizer_state = optimizer.state_dict()
 
         if rank == 0:
@@ -157,10 +149,14 @@ def fsdp_main(rank, world_size, args):
             }
             torch.save(checkpoint, os.path.join(args.output_dir, f"checkpoint_{epoch}.pt"))
 
-            model.eval()
-            with torch.no_grad():
-                sample_text = ["1girl black_shirt blue_archive shiroko_(blue_archive)"]
-                gen = model(sample_text)
+            writer.add_scalar("Loss/generator_epoch", avg_loss, epoch)
+
+        model.eval()
+        with torch.no_grad():
+            sample_text = ["1girl black_shirt blue_archive shiroko_(blue_archive)"]
+            gen = model(sample_text)
+
+            if rank == 0:
                 grid = make_grid(gen, nrow=1)
                 writer.add_image(f"Generated/Epoch_{epoch}", grid, epoch)
 
@@ -171,7 +167,7 @@ def parse_args():
     parser.add_argument("--tokenizer_path", type=str, required=True)
     parser.add_argument("--output_dir", type=str, default="./output")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=42)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--resume", type=str, default=None)

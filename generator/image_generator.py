@@ -22,11 +22,11 @@ class ImageGenerator(nn.Module):
 #        state_dict = torch.load(text_encoder_path, map_location=self.device)
         self.text_encoder = TextEncoder(
             vocab_size=self.tokenizer.vocab_size
-        ).to(self.device).to(self.dtype)
+        )
 
         self.vae = AutoencoderKL.from_pretrained(
             "stabilityai/sd-vae-ft-mse").to(self.device).to(self.dtype)
-        self.unet = load_unet(self.device).to(self.dtype)
+        self.unet = load_unet()
         self.scheduler = DDPMScheduler.from_pretrained(
             "CompVis/stable-diffusion-v1-4", subfolder="scheduler")
 
@@ -39,12 +39,19 @@ class ImageGenerator(nn.Module):
             text, padding=padding, max_length=128,
             truncation=True, return_tensors="pt"
         )
-        attention_mask = text_inputs.attention_mask.to(self.device)
-        text_input_ids = text_inputs.input_ids.to(self.device)
+
+        target_device = next(self.text_encoder.parameters()).device
+
+        attention_mask = text_inputs.attention_mask.to(device=target_device)
+        text_input_ids = text_inputs.input_ids.to(target_device)
+
         text_embeddings = self.text_encoder(input_ids=text_input_ids, attention_mask=attention_mask, return_pooled=False)
         return text_embeddings
 
     def decode_latents(self, latents):
+        device = next(self.vae.parameters()).device
+
+        latents = latents.to(device)
         latents = 1 / 0.18215 * latents
         with torch.no_grad():
             image = self.vae.decode(latents).sample
@@ -52,28 +59,30 @@ class ImageGenerator(nn.Module):
         return image
 
     def forward(self, text, num_inference_steps=50, guidance_scale=7.5):
-        text_embeddings = self.encode_text(text)
-        uncond_input = [""]
-        uncond_embeddings = self.encode_text(uncond_input)
-        text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+        encoder_device = next(self.text_encoder.parameters()).device
+        unet_device = next(self.unet.parameters()).device
 
-        self.scheduler.set_timesteps(num_inference_steps)
-        timesteps = self.scheduler.timesteps
+        text_embeddings = self.encode_text(text)
+        uncond_embeddings = self.encode_text([""])
+        text_embeddings = torch.cat([uncond_embeddings, text_embeddings]).to(unet_device)
 
         latents = torch.randn(
             (1, self.unet.config.in_channels, 64, 64),
-            device=self.device,
+            device=unet_device,
             dtype=self.dtype
         )
 
-        for t in timesteps:
+        self.scheduler.set_timesteps(num_inference_steps)
+        for t in self.scheduler.timesteps:
             latent_model_input = torch.cat([latents] * 2)
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
-            t_tensor = t.to(self.device).to(self.dtype)
+            t_tensor = t.to(unet_device)
+
             with torch.no_grad():
                 noise_pred = self.unet(
                     latent_model_input, t_tensor, encoder_hidden_states=text_embeddings
                 ).sample
+
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
             latents = self.scheduler.step(noise_pred, t, latents).prev_sample.to(self.dtype)
@@ -81,8 +90,11 @@ class ImageGenerator(nn.Module):
         return self.decode_latents(latents)
 
     def train_step(self, image, text):
+        vae_device = next(self.vae.parameters()).device
+        unet_device = next(self.unet.parameters()).device
+
         with torch.no_grad():
-            latent = self.vae.encode(image.to(self.device, self.dtype)).latent_dist.sample()
+            latent = self.vae.encode(image.to(vae_device, self.dtype)).latent_dist.sample()
             latent = latent * 0.18215
 
             latent_mean = latent.mean().item()
@@ -95,21 +107,24 @@ class ImageGenerator(nn.Module):
                 print(f"[train_step] Abnormal latent std detected! mean={latent_mean:.6f}, std={latent_std:.6f}")
                 return None
 
+        latent = latent.to(unet_device)
         bsz = latent.shape[0]
-        t = torch.randint(0, self.scheduler.config.num_train_timesteps, (bsz,), device=self.device).long()
-        noise = torch.randn_like(latent)
+        t = torch.randint(0, self.scheduler.config.num_train_timesteps, (bsz,), device=unet_device).long()
+        noise = torch.randn_like(latent).to(unet_device)
         noisy_latent = self.scheduler.add_noise(latent, noise, t)
-        text_embed = self.encode_text(text, 'longest')
-        noise_pred = self.unet(noisy_latent, t.to(self.dtype), encoder_hidden_states=text_embed).sample
 
+        text_embed = self.encode_text(text, 'longest')
+        noise_pred = self.unet(noisy_latent, t, encoder_hidden_states=text_embed).sample
         loss = F.mse_loss(noise_pred, noise)
-        if loss.item() >= 2.0:
-            print(f"[train_step] loss too high! {loss.item():.4f}")
+
+        if torch.isnan(loss) or  torch.isinf(loss) or loss.item() >= 2.0:
+            print(f"[train_step] Invalid loss: {loss.item():.4f}")
             return None
+
         return loss
 
 
-def load_unet(device):
+def load_unet():
     unet = UNet2DConditionModel(
         sample_size=64,
         in_channels=4,
@@ -130,6 +145,6 @@ def load_unet(device):
         ),
         cross_attention_dim=768,
         attention_head_dim=8,
-    ).to(device)
+    )
 
     return unet
