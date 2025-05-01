@@ -186,22 +186,12 @@ class LMDBImageDataset(Dataset):
             self.transform = transforms.Compose([
                 transforms.Resize((224, 224)),
                 transforms.RandomApply([
-                    transforms.RandomResizedCrop(
-                        size=(224, 224),
-                        scale=(0.8, 1.0),
-                        ratio=(0.8, 1.2)
-                    )
-                ], p=0.8),
-                transforms.RandomApply([
                     transforms.ColorJitter(
                         brightness=0.05,
                         contrast=0.05,
                         saturation=0.05,
                         hue=0.02
                     )
-                ], p=0.5),
-                transforms.RandomApply([
-                    transforms.RandomRotation(15)
                 ], p=0.5),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.ToTensor(),

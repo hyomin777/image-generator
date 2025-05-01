@@ -25,9 +25,9 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def setup_train_dataloader(args, dataset_cls, accelerator):
+def setup_train_dataloader(args, dataset_cls):
     dataset = dataset_cls(Path(args.data_dir))
-    sampler = DistributedSampler(dataset, num_replicas=accelerator.num_processes, rank=accelerator.process_index, shuffle=True)
+    sampler = DistributedSampler(dataset, num_replicas=args.num_workers, rank=args.local_rank, shuffle=True)
     dataloader = DataLoader(
         dataset,
         sampler=sampler,

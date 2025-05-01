@@ -8,10 +8,9 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-from dataset import RefinedImageDataset
+from dataset import LMDBImageDataset
 from tokenizer.tokenizer import load_tokenizer
 from loss import cosine_contrastive_loss
-from utils.gpu_manager import get_gpu_temp, wait_for_cooldown
 from utils.tensorboard_logging import log_text_image_embeddings
 from utils.save_model import save_checkpoint, load_checkpoint, save_weights
 from setup_training import setup, cleanup, setup_train_dataloader, initialize_encoders, wrap_model, summary_writer
@@ -21,7 +20,7 @@ def train_anchor(args):
     setup()
     device = torch.device(f'cuda:{args.local_rank}')
 
-    dataloader = setup_train_dataloader(args, RefinedImageDataset)
+    dataloader = setup_train_dataloader(args, LMDBImageDataset)
     tokenizer = load_tokenizer(args.tokenizer_path)
     image_encoder, text_encoder, optimizer = initialize_encoders(args, tokenizer.vocab_size, device)
     writer = None
@@ -49,8 +48,6 @@ def train_anchor(args):
             if batch is None:
                 progress_bar.update(1)
                 continue
-            if get_gpu_temp(args.local_rank) >= 80:
-                wait_for_cooldown(args.local_rank)
 
             images = batch["image"].to(device)
             raw_text = [t['raw_text'] for t in batch["text"]]
@@ -120,7 +117,7 @@ def main():
     parser.add_argument("--tokenizer_path", type=str, default="tokenizer/tokenizer.json")
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num_workers", type=int, default=6)
     parser.add_argument("--local_rank", type=int, default=os.environ.get("LOCAL_RANK", 0))
