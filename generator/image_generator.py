@@ -12,17 +12,18 @@ from tokenizer.tokenizer import load_tokenizer
 
 
 class ImageGenerator(nn.Module):
-    def __init__(self, device, tokenizer_path):
+    def __init__(self, device, text_encoder_path, tokenizer_path):
         super().__init__()
         self.device = device
         self.dtype = torch.float32
 
         self.tokenizer = load_tokenizer(tokenizer_path)
 
-#        state_dict = torch.load(text_encoder_path, map_location=self.device)
+        text_encoder_state_dict = torch.load(text_encoder_path, map_location=self.device)
         self.text_encoder = TextEncoder(
             vocab_size=self.tokenizer.vocab_size
-        )
+        ).to(self.device)
+        self.text_encoder.load_state_dict(text_encoder_state_dict)
 
         self.vae = AutoencoderKL.from_pretrained(
             "stabilityai/sd-vae-ft-mse").to(self.device).to(self.dtype)
@@ -30,28 +31,32 @@ class ImageGenerator(nn.Module):
         self.scheduler = DDPMScheduler.from_pretrained(
             "CompVis/stable-diffusion-v1-4", subfolder="scheduler")
 
+        self.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
 
     def encode_text(self, text, padding='max_length'):
         if isinstance(text, str):
             text = [text]
+
         text_inputs = self.tokenizer(
             text, padding=padding, max_length=128,
             truncation=True, return_tensors="pt"
         )
 
-        target_device = next(self.text_encoder.parameters()).device
+        encoder_device = next(self.text_encoder.parameters()).device
 
-        attention_mask = text_inputs.attention_mask.to(device=target_device)
-        text_input_ids = text_inputs.input_ids.to(target_device)
+        attention_mask = text_inputs.attention_mask.to(device=encoder_device)
+        text_input_ids = text_inputs.input_ids.to(encoder_device)
 
-        text_embeddings = self.text_encoder(input_ids=text_input_ids, attention_mask=attention_mask, return_pooled=False)
+        with torch.no_grad():
+            text_embeddings = self.text_encoder(input_ids=text_input_ids, attention_mask=attention_mask, return_pooled=False)
+        
         return text_embeddings
 
     def decode_latents(self, latents):
-        device = next(self.vae.parameters()).device
+        vae_device = next(self.vae.parameters()).device
 
-        latents = latents.to(device)
+        latents = latents.to(vae_device)
         latents = 1 / 0.18215 * latents
         with torch.no_grad():
             image = self.vae.decode(latents).sample
@@ -59,7 +64,6 @@ class ImageGenerator(nn.Module):
         return image
 
     def forward(self, text, num_inference_steps=50, guidance_scale=7.5):
-        encoder_device = next(self.text_encoder.parameters()).device
         unet_device = next(self.unet.parameters()).device
 
         text_embeddings = self.encode_text(text)

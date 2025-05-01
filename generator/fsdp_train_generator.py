@@ -44,7 +44,7 @@ def fsdp_main(rank, world_size, args):
         buffer_dtype=torch.float16,
     )
 
-    model = ImageGenerator(device, args.tokenizer_path)
+    model = ImageGenerator(device, args.text_encoder_path, args.tokenizer_path)
     model.vae.to(device)
     model.text_encoder.to(device)
     model.unet = FSDP(model.unet.to(device), auto_wrap_policy=auto_wrap_policy, mixed_precision=mp_policy)
@@ -72,7 +72,6 @@ def fsdp_main(rank, world_size, args):
         with FSDP.state_dict_type(model, state_dict_type=StateDictType.FULL_STATE_DICT, state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
                                    optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),):
             model.unet.load_state_dict(checkpoint["unet"])
-            model.text_encoder.load_state_dict(checkpoint["text_encoder"])
 #            optimizer.load_state_dict(checkpoint["optimizer"])
 
         global_step = checkpoint["global_step"]
@@ -128,20 +127,16 @@ def fsdp_main(rank, world_size, args):
             state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
             optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),
         ):
-
             unet_state = model.unet.state_dict()
-            text_encoder_state = model.text_encoder.state_dict()
             optimizer_state = optimizer.state_dict()
 
         if rank == 0:
             if avg_loss < best_loss:
                 best_loss = avg_loss
                 torch.save(unet_state, os.path.join(args.output_dir, "unet.pth"))
-                torch.save(text_encoder_state, os.path.join(args.output_dir, "text_encoder.pth"))
 
             checkpoint = {
                 "unet": unet_state,
-                "text_encoder": text_encoder_state,
                 "optimizer": optimizer_state,
                 "global_step": global_step,
                 "best_loss": best_loss,
@@ -164,8 +159,9 @@ def fsdp_main(rank, world_size, args):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--tokenizer_path", type=str, required=True)
-    parser.add_argument("--output_dir", type=str, default="./output")
+    parser.add_argument("--tokenizer_path", type=str, default='tokenizer/tokenizer.json')
+    parser.add_argument("--text_encoder_path", type=str, default='output/weights/text_encoder.pth')
+    parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=8)
