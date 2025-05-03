@@ -3,12 +3,14 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 
-
 import argparse
 from pathlib import Path
 from functools import partial
+
 import torch
 import torch.distributed as dist
+from torch.nn import TransformerEncoderLayer
+
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
 from torch.distributed.fsdp.fully_sharded_data_parallel import (
     FullStateDictConfig, FullOptimStateDictConfig, StateDictType
@@ -22,7 +24,7 @@ from tqdm import tqdm
 from dataset import LMDBImageDataset
 from image_generator import ImageGenerator
 from utils.collate_fn import skip_broken_collate_fn
-from torch.nn import TransformerEncoderLayer
+from transform import normalize
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -55,7 +57,7 @@ def fsdp_main(rank, world_size, args):
     dataloader = DataLoader(dataset, sampler=sampler, batch_size=args.batch_size, num_workers=args.num_workers, collate_fn=skip_broken_collate_fn)
 
     # Optimizer & Scaler
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(model.unet.parameters(), lr=args.lr)
     scaler = torch.GradScaler(device.type)
 
     # TensorBoard
@@ -72,7 +74,7 @@ def fsdp_main(rank, world_size, args):
         with FSDP.state_dict_type(model, state_dict_type=StateDictType.FULL_STATE_DICT, state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
                                    optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),):
             model.unet.load_state_dict(checkpoint["unet"])
-#            optimizer.load_state_dict(checkpoint["optimizer"])
+            optimizer.load_state_dict(checkpoint["optimizer"])
 
         global_step = checkpoint["global_step"]
         best_loss = checkpoint["best_loss"]
@@ -96,7 +98,8 @@ def fsdp_main(rank, world_size, args):
             if batch is None:
                 continue
 
-            images = batch["image"]
+            images = batch["image"].to(device, non_blocking=True)
+            images = normalize(images)
             raw_text = raw_text = [t['raw_text'] for t in batch["text"]]
 
             with torch.autocast(device.type):
@@ -107,7 +110,7 @@ def fsdp_main(rank, world_size, args):
 
             optimizer.zero_grad()
             scaler.scale(loss).backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
             scaler.step(optimizer)
             scaler.update()
 
@@ -116,7 +119,8 @@ def fsdp_main(rank, world_size, args):
             progress_bar.set_postfix({"loss": loss.item()})
 
             if rank == 0 and global_step % 100 == 0:
-                writer.add_scalar("Loss/generator_step", loss.item(), global_step)
+                if writer is not None:
+                    writer.add_scalar("Loss/generator_step", loss.item(), global_step)
             global_step += 1
 
         avg_loss = total_loss / len(dataloader)
@@ -131,9 +135,15 @@ def fsdp_main(rank, world_size, args):
             optimizer_state = optimizer.state_dict()
 
         if rank == 0:
+            if writer is not None:
+                writer.add_scalar("Loss/generator_epoch", avg_loss, epoch)
+
             if avg_loss < best_loss:
                 best_loss = avg_loss
-                torch.save(unet_state, os.path.join(args.output_dir, "unet.pth"))
+                weights_path = Path(args.output_dir) / 'weights'
+                weights_path.mkdir(parents=True, exist_ok=True)
+                torch.save(unet_state, os.path.join(weights_path, "unet.pth"))
+                print(f'[Epoch {epoch}] Unet weights saved with loss {avg_loss:.4f}', flush=True)
 
             checkpoint = {
                 "unet": unet_state,
@@ -142,9 +152,11 @@ def fsdp_main(rank, world_size, args):
                 "best_loss": best_loss,
                 "epoch": epoch,
             }
-            torch.save(checkpoint, os.path.join(args.output_dir, f"checkpoint_{epoch}.pt"))
+            checkpoint_path = Path(args.output_dir) / 'checkpoints'
+            checkpoint_path.mkdir(parents=True, exist_ok=True)
+            torch.save(checkpoint, os.path.join(args.output_dir, f"generator_checkpoint_{epoch}.pt"))
 
-            writer.add_scalar("Loss/generator_epoch", avg_loss, epoch)
+
 
         model.eval()
         with torch.no_grad():
@@ -166,6 +178,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--clip_grad", type=float, fefault=5.0)
     parser.add_argument("--resume", type=str, default=None)
     return parser.parse_args()
 

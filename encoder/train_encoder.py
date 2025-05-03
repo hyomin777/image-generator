@@ -16,7 +16,6 @@ from dataset import LMDBImageDataset
 from tokenizer.tokenizer import load_tokenizer
 from loss import cosine_contrastive_loss
 from setup_training import initialize_encoders, wrap_model
-from utils.save_model import save_weights
 from utils.collate_fn import skip_broken_collate_fn
 from transform import normalize
 from utils.tensorboard_logging import log_text_image_embeddings
@@ -97,16 +96,16 @@ def train_anchor(rank, world_size, args):
             progress_bar.update(1)
             progress_bar.set_postfix({"loss": loss.item()})
 
-            if rank == 0 and writer is not None:
-                global_step += 1
-                if global_step % 100 == 0:
+            if rank == 0 and global_step % 100 == 0:
+                if writer is not None:
                     writer.add_scalar('Loss/anchor_step', loss.item(), global_step)
+            global_step += 1
 
         avg_loss = total_loss / len(dataloader)
-        if rank == 0 and writer is not None:
-            writer.add_scalar('Loss/anchor_epoch', avg_loss, epoch)
-
         if rank == 0:
+            if writer is not None:
+                writer.add_scalar('Loss/anchor_epoch', avg_loss, epoch)
+
             text_encoder_state = text_encoder.module.state_dict() if hasattr(text_encoder, "module") else text_encoder.state_dict()
             image_encoder_state = image_encoder.module.state_dict() if hasattr(image_encoder, "module") else image_encoder.state_dict()
 
@@ -116,7 +115,7 @@ def train_anchor(rank, world_size, args):
                 weights_path.mkdir(parents=True, exist_ok=True)
                 torch.save(text_encoder_state, weights_path / 'text_encoder.pth')
                 torch.save(image_encoder_state, weights_path / 'image_encoder.pth')
-                print(f'[Epoch {epoch}] encoder saved with loss {avg_loss:.4f}', flush=True)
+                print(f'[Epoch {epoch}] Encoder weights saved with loss {avg_loss:.4f}', flush=True)
 
             checkpoint = {
                 'text_encoder': text_encoder_state,
@@ -129,6 +128,7 @@ def train_anchor(rank, world_size, args):
             checkpoint_path = Path(args.output_dir) / 'checkpoints'
             checkpoint_path.mkdir(parents=True, exist_ok=True)
             torch.save(checkpoint, checkpoint_path / f'encoder_checkpoint_{epoch}.pt')
+            print(f'[Epoch {epoch}] Encoder checkpoint saved', flush=True)
 
             if writer is not None:
                 sample_batch = next(
