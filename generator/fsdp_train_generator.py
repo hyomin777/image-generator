@@ -178,7 +178,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--clip_grad", type=float, fefault=5.0)
+    parser.add_argument("--clip_grad", type=float, default=5.0)
     parser.add_argument("--resume", type=str, default=None)
     return parser.parse_args()
 
