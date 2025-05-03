@@ -1,3 +1,4 @@
+
 import os
 import sys
 
@@ -18,7 +19,6 @@ from loss import cosine_contrastive_loss
 from setup_training import initialize_encoders, wrap_model
 from utils.save_model import save_weights
 from utils.collate_fn import skip_broken_collate_fn
-from transform import normalize
 from utils.tensorboard_logging import log_text_image_embeddings
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -31,7 +31,7 @@ def train_anchor(rank, world_size, args):
 
     dataset = LMDBImageDataset(args.data_dir)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
-    dataloader = DataLoader(dataset, sampler=sampler, batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=True, collate_fn=skip_broken_collate_fn)
+    dataloader = DataLoader(dataset, sampler=sampler, batch_size=args.batch_size, num_workers=args.num_workers, collate_fn=skip_broken_collate_fn)
 
     tokenizer = load_tokenizer(args.tokenizer_path)
     image_encoder, text_encoder, optimizer = initialize_encoders(args, tokenizer.vocab_size, device)
@@ -69,8 +69,7 @@ def train_anchor(rank, world_size, args):
                 progress_bar.update(1)
                 continue
 
-            images = batch["image"].to(device, non_blocking=True)
-            images = normalize(images)
+            images = batch["image"].to(device)
             raw_text = [t['raw_text'] for t in batch["text"]]
 
             tokenized_raw = tokenizer(
@@ -80,8 +79,8 @@ def train_anchor(rank, world_size, args):
                 max_length=128,
                 return_tensors='pt'
             )
-            input_ids_raw = tokenized_raw.input_ids.to(device, non_blocking=True)
-            attention_mask_raw = tokenized_raw.attention_mask.to(device, non_blocking=True)
+            input_ids_raw = tokenized_raw.input_ids.to(device)
+            attention_mask_raw = tokenized_raw.attention_mask.to(device)
 
             with torch.autocast(device.type):
                 image_embeds = image_encoder.module.get_image_features(pixel_values=images)
@@ -107,20 +106,17 @@ def train_anchor(rank, world_size, args):
             writer.add_scalar('Loss/anchor_epoch', avg_loss, epoch)
 
         if rank == 0:
-            text_encoder_state = text_encoder.module.state_dict() if hasattr(text_encoder, "module") else text_encoder.state_dict()
-            image_encoder_state = image_encoder.module.state_dict() if hasattr(image_encoder, "module") else image_encoder.state_dict()
+            text_encoder_state = 
 
             if avg_loss < best_loss:
                 best_loss = avg_loss
-                weights_path = Path(args.output_dir) / 'weights'
-                weights_path.mkdir(parents=True, exist_ok=True)
-                torch.save(text_encoder_state, weights_path / 'text_encoder.pth')
-                torch.save(image_encoder_state, weights_path / 'image_encoder.pth')
+                save_weights(text_encoder.module, 'text_encoder', Path(args.output_dir))
+                save_weights(image_encoder.module, 'image_encoder', Path(args.output_dir))
                 print(f'[Epoch {epoch}] encoder saved with loss {avg_loss:.4f}', flush=True)
 
             checkpoint = {
-                'text_encoder': text_encoder_state,
-                'image_encoder': image_encoder_state,
+                'text_encoder': text_encoder.module.state_dict() if hasattr(text_encoder, "module") else text_encoder.state_dict(),
+                'image_encoder': image_encoder.module.state_dict() if hasattr(image_encoder, "module") else image_encoder.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'global_step': global_step,
                 'best_loss': best_loss,
@@ -158,7 +154,7 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--num_workers", type=int, default=6)
     parser.add_argument("--resume", type=str, default=None)
     return parser.parse_args()
 

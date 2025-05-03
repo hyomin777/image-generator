@@ -66,7 +66,7 @@ def fsdp_main(rank, world_size, args):
     start_epoch = 1
 
     if args.resume and os.path.exists(args.resume):
-        map_location = {"cuda:%d" % 0: "cuda:%d" % rank}
+        map_location = {"cuda:0": f"cuda:{rank}"}
         checkpoint = torch.load(args.resume, map_location=map_location)
 
         with FSDP.state_dict_type(model, state_dict_type=StateDictType.FULL_STATE_DICT, state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),

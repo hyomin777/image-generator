@@ -194,11 +194,7 @@ class LMDBImageDataset(Dataset):
                     )
                 ], p=0.5),
                 transforms.RandomHorizontalFlip(p=0.5),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.48145466, 0.4578275, 0.40821073],
-                    std=[0.26862954, 0.26130258, 0.27577711]
-                )
+                transforms.ToTensor()
             ])
         else:
             self.transform = transforms.Compose([
@@ -221,6 +217,7 @@ class LMDBImageDataset(Dataset):
         try:
             image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         except Exception as e:
+            print(e)
             return self.__getitem__((idx + 1) % len(self))
 
         meta = pickle.loads(meta_bytes)

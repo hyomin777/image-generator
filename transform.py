@@ -1,9 +1,13 @@
 import torch
 
 
-def normalize(tensor, mean, std):
-    mean = torch.tensor(mean, device=tensor.device).view(3, 1, 1)
-    std = torch.tensor(std, device=tensor.device).view(3, 1, 1)
+def normalize(
+        tensor,
+        mean=[0.48145466, 0.4578275, 0.40821073],
+        std=[0.26862954, 0.26130258, 0.27577711]
+    ):
+    mean = torch.tensor(mean, device=tensor.device).view(1, 3, 1, 1)
+    std = torch.tensor(std, device=tensor.device).view(1, 3, 1, 1)
     return (tensor - mean) / std
 
 
