@@ -8,14 +8,17 @@ from pathlib import Path
 from tqdm import tqdm
 
 import torch
+import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
 
+from encoder.image_encoder import ImageEncoder
+from encoder.text_encoder import TextEncoder
 from dataset import LMDBImageDataset
 from tokenizer.tokenizer import load_tokenizer
 from loss import cosine_contrastive_loss
-from setup_training import initialize_encoders, wrap_model
+from setup_training import wrap_model
 from utils.collate_fn import skip_broken_collate_fn
 from transform import normalize
 from utils.tensorboard_logging import log_text_image_embeddings
@@ -33,7 +36,12 @@ def train_anchor(rank, world_size, args):
     dataloader = DataLoader(dataset, sampler=sampler, batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=True, collate_fn=skip_broken_collate_fn)
 
     tokenizer = load_tokenizer(args.tokenizer_path)
-    image_encoder, text_encoder, optimizer = initialize_encoders(args, tokenizer.vocab_size, device)
+    image_encoder = ImageEncoder().to(device)
+    text_encoder = TextEncoder(vocab_size=tokenizer.vocab_size).to(device)
+
+    params_to_optimize = list(text_encoder.parameters()) + [p for p in image_encoder.parameters() if p.requires_grad]
+    optimizer = optim.AdamW(params_to_optimize, lr=args.lr)
+
     scaler = torch.GradScaler(device.type)
     writer = SummaryWriter(log_dir=Path(args.output_dir) / 'logs') if rank == 0 else None
 
@@ -83,7 +91,7 @@ def train_anchor(rank, world_size, args):
             attention_mask_raw = tokenized_raw.attention_mask.to(device, non_blocking=True)
 
             with torch.autocast(device.type):
-                image_embeds = image_encoder.module.get_image_features(pixel_values=images)
+                image_embeds = image_encoder(pixel_values=images)
                 raw_text_embeds = text_encoder(input_ids=input_ids_raw, attention_mask=attention_mask_raw)
                 loss = cosine_contrastive_loss(raw_text_embeds, image_embeds)
 
@@ -144,7 +152,8 @@ def train_anchor(rank, world_size, args):
                         image_encoder=image_encoder,
                         text_encoder=text_encoder,
                         tokenizer=tokenizer,
-                        device=device
+                        device=device,
+                        global_step=epoch
                     )
 
     dist.destroy_process_group()
@@ -156,7 +165,7 @@ def parse_args():
     parser.add_argument("--tokenizer_path", type=str, default='tokenizer/tokenizer.json')
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--resume", type=str, default=None)

@@ -3,7 +3,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 @torch.no_grad()
-def log_text_image_embeddings(writer: SummaryWriter, tag, images, raw_texts, image_encoder, text_encoder, tokenizer, device):
+def log_text_image_embeddings(writer: SummaryWriter, tag, images, raw_texts, image_encoder, text_encoder, tokenizer, device, global_step):
     if writer is None:
         return
 
@@ -22,7 +22,7 @@ def log_text_image_embeddings(writer: SummaryWriter, tag, images, raw_texts, ima
 
     image_encoder = image_encoder.module if hasattr(image_encoder, "module") else image_encoder
     image_encoder.eval()
-    image_embeds = image_encoder.get_image_features(pixel_values=images)
+    image_embeds = image_encoder(images)
 
     text_encoder = text_encoder.module if hasattr(text_encoder, "module") else text_encoder
     text_encoder.eval()
@@ -37,5 +37,6 @@ def log_text_image_embeddings(writer: SummaryWriter, tag, images, raw_texts, ima
         all_embeds,
         metadata=all_labels,
         label_img=all_imgs,
-        tag=tag
+        tag=tag,
+        global_step=global_step
     )

@@ -154,7 +154,7 @@ def fsdp_main(rank, world_size, args):
             }
             checkpoint_path = Path(args.output_dir) / 'checkpoints'
             checkpoint_path.mkdir(parents=True, exist_ok=True)
-            torch.save(checkpoint, os.path.join(args.output_dir, f"generator_checkpoint_{epoch}.pt"))
+            torch.save(checkpoint, os.path.join(checkpoint_path, f"generator_checkpoint_{epoch}.pt"))
 
 
 
@@ -175,7 +175,7 @@ def parse_args():
     parser.add_argument("--text_encoder_path", type=str, default='output/weights/text_encoder.pth')
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=48)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--clip_grad", type=float, default=5.0)
