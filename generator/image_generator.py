@@ -113,6 +113,9 @@ class ImageGenerator(nn.Module):
 
         latent = latent.to(unet_device)
         bsz = latent.shape[0]
+
+        self.scheduler.set_timesteps(num_inference_steps=self.scheduler.config.num_train_timesteps)
+
         t = torch.randint(0, self.scheduler.config.num_train_timesteps, (bsz,), device=unet_device).long()
         noise = torch.randn_like(latent).to(unet_device)
         noisy_latent = self.scheduler.add_noise(latent, noise, t)
@@ -121,7 +124,7 @@ class ImageGenerator(nn.Module):
         noise_pred = self.unet(noisy_latent, t, encoder_hidden_states=text_embed).sample
         loss = F.mse_loss(noise_pred, noise)
 
-        if torch.isnan(loss) or  torch.isinf(loss) or loss.item() >= 2.0:
+        if torch.isnan(loss) or  torch.isinf(loss):
             print(f"[train_step] Invalid loss: {loss.item():.4f}")
             return None
 
