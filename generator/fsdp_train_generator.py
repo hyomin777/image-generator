@@ -106,6 +106,7 @@ def fsdp_main(rank, world_size, args):
                 loss = model.train_step(images, raw_text)
             if loss is None:
                 progress_bar.update(1)
+                optimizer.zero_grad()
                 continue
 
             optimizer.zero_grad()
@@ -175,7 +176,7 @@ def parse_args():
     parser.add_argument("--text_encoder_path", type=str, default='output/weights/text_encoder.pth')
     parser.add_argument("--output_dir", type=str, default="output")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=48)
+    parser.add_argument("--batch_size", type=int, default=52)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--clip_grad", type=float, default=5.0)
