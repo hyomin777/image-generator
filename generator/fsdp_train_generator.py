@@ -67,14 +67,24 @@ def fsdp_main(rank, world_size, args):
     best_loss = 1
     start_epoch = 1
 
+    prev_unet_state = None
+    prev_optim_state = None
+
     if args.resume and os.path.exists(args.resume):
         map_location = {"cuda:0": f"cuda:{rank}"}
         checkpoint = torch.load(args.resume, map_location=map_location)
 
-        with FSDP.state_dict_type(model, state_dict_type=StateDictType.FULL_STATE_DICT, state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
-                                   optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),):
-            model.unet.load_state_dict(checkpoint["unet"])
-            optimizer.load_state_dict(checkpoint["optimizer"])
+        with FSDP.state_dict_type(
+            model, 
+            state_dict_type=StateDictType.FULL_STATE_DICT, 
+            state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
+            optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        ):
+            prev_unet_state = checkpoint["unet"]
+            prev_optim_state = checkpoint["optimizer"]
+
+            model.unet.load_state_dict(prev_unet_state)
+            optimizer.load_state_dict(prev_optim_state)
 
         global_step = checkpoint["global_step"]
         best_loss = checkpoint["best_loss"]
@@ -104,9 +114,19 @@ def fsdp_main(rank, world_size, args):
 
             with torch.autocast(device.type):
                 loss = model.train_step(images, raw_text)
-            if loss is None:
+
+            if loss is None and prev_unet_state is not None and prev_optim_state is not None:
+                with FSDP.state_dict_type(
+                    model, 
+                    state_dict_type=StateDictType.FULL_STATE_DICT, 
+                    state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
+                    optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True)
+                ):
+                    model.unet.load_state_dict(prev_unet_state)
+                    optimizer.load_state_dict(prev_optim_state)
                 progress_bar.update(1)
                 optimizer.zero_grad()
+                print(f"[Step {global_step}] Loss is None. Reverting to previous checkpoint.", flush=True)
                 continue
 
             optimizer.zero_grad()
@@ -119,9 +139,18 @@ def fsdp_main(rank, world_size, args):
             progress_bar.update(1)
             progress_bar.set_postfix({"loss": loss.item()})
 
-            if rank == 0 and global_step % 100 == 0:
-                if writer is not None:
+            if global_step % 100 == 0:
+                with FSDP.state_dict_type(
+                    model,
+                    state_dict_type=StateDictType.FULL_STATE_DICT,
+                    state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=False),
+                ):
+                    prev_unet_state = model.unet.state_dict()
+                    prev_optim_state = optimizer.state_dict()
+
+                if rank == 0 and writer is not None:
                     writer.add_scalar("Loss/generator_step", loss.item(), global_step)
+
             global_step += 1
 
         avg_loss = total_loss / len(dataloader)
