@@ -10,6 +10,7 @@ from functools import partial
 import torch
 import torch.distributed as dist
 from torch.nn import TransformerEncoderLayer
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
 from torch.distributed.fsdp.fully_sharded_data_parallel import (
@@ -56,9 +57,10 @@ def fsdp_main(rank, world_size, args):
     sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
     dataloader = DataLoader(dataset, sampler=sampler, batch_size=args.batch_size, num_workers=args.num_workers, collate_fn=skip_broken_collate_fn)
 
-    # Optimizer & Scaler
+    # Optimizer & Scaler & Scheduler
     optimizer = torch.optim.AdamW(model.unet.parameters(), lr=args.lr)
     scaler = torch.GradScaler(device.type)
+    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=1e-6)
 
     # TensorBoard
     writer = SummaryWriter(log_dir=Path(args.output_dir) / 'logs') if rank == 0 else None
@@ -75,8 +77,8 @@ def fsdp_main(rank, world_size, args):
         checkpoint = torch.load(args.resume, map_location=map_location)
 
         with FSDP.state_dict_type(
-            model, 
-            state_dict_type=StateDictType.FULL_STATE_DICT, 
+            model,
+            state_dict_type=StateDictType.FULL_STATE_DICT,
             state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
             optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True)
         ):
@@ -104,7 +106,7 @@ def fsdp_main(rank, world_size, args):
 
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch}", disable=rank != 0)
 
-        for batch in dataloader:
+        for idx, batch in enumerate(dataloader):
             if batch is None:
                 continue
 
@@ -117,8 +119,8 @@ def fsdp_main(rank, world_size, args):
 
             if loss is None and prev_unet_state is not None and prev_optim_state is not None:
                 with FSDP.state_dict_type(
-                    model, 
-                    state_dict_type=StateDictType.FULL_STATE_DICT, 
+                    model,
+                    state_dict_type=StateDictType.FULL_STATE_DICT,
                     state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
                     optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True)
                 ):
@@ -131,23 +133,25 @@ def fsdp_main(rank, world_size, args):
 
             optimizer.zero_grad()
             scaler.scale(loss).backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            torch.nn.utils.clip_grad_norm_(model.unet.parameters(), args.clip_grad)
             scaler.step(optimizer)
             scaler.update()
+
+            scheduler.step(epoch + idx / len(dataloader))
 
             total_loss += loss.item()
             progress_bar.update(1)
             progress_bar.set_postfix({"loss": loss.item()})
 
-            if global_step % 100 == 0:
+            if global_step % 1000 == 0:
                 with FSDP.state_dict_type(
                     model,
                     state_dict_type=StateDictType.FULL_STATE_DICT,
-                    state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=False),
+                    state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
+                    optim_state_dict_config=FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True),
                 ):
                     prev_unet_state = model.unet.state_dict()
                     prev_optim_state = optimizer.state_dict()
-
                 if rank == 0 and writer is not None:
                     writer.add_scalar("Loss/generator_step", loss.item(), global_step)
 
@@ -186,7 +190,7 @@ def fsdp_main(rank, world_size, args):
             checkpoint_path.mkdir(parents=True, exist_ok=True)
             torch.save(checkpoint, os.path.join(checkpoint_path, f"generator_checkpoint_{epoch}.pt"))
 
-
+            print(f"[Epoch {epoch}] LR: {scheduler.get_last_lr()[0]:.8f}")
 
         model.eval()
         with torch.no_grad():
@@ -204,8 +208,8 @@ def parse_args():
     parser.add_argument("--tokenizer_path", type=str, default='tokenizer/tokenizer.json')
     parser.add_argument("--text_encoder_path", type=str, default='output/weights/text_encoder.pth')
     parser.add_argument("--output_dir", type=str, default="output")
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=52)
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--batch_size", type=int, default=60)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--clip_grad", type=float, default=5.0)
