@@ -17,7 +17,7 @@ from encoder.image_encoder import ImageEncoder
 from encoder.text_encoder import TextEncoder
 from dataset import LMDBImageDataset
 from tokenizer.tokenizer import load_tokenizer
-from loss import cosine_contrastive_loss
+from loss import ContrastiveLoss
 from setup_training import wrap_model
 from utils.collate_fn import skip_broken_collate_fn
 from transform import normalize
@@ -38,9 +38,15 @@ def train_anchor(rank, world_size, args):
     tokenizer = load_tokenizer(args.tokenizer_path)
     image_encoder = ImageEncoder().to(device)
     text_encoder = TextEncoder(vocab_size=tokenizer.vocab_size).to(device)
-
-    params_to_optimize = list(text_encoder.parameters()) + [p for p in image_encoder.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(params_to_optimize, lr=args.lr)
+    contrastive_loss = ContrastiveLoss().to(device)
+    optimizer = optim.AdamW(
+        [
+            {"params": text_encoder.parameters()},
+            {"params": [p for p in image_encoder.parameters() if p.requires_grad]},
+            {"params": contrastive_loss.parameters(), "lr": args.lr * 0.1}
+        ],
+        lr=args.lr
+    )
 
     scaler = torch.GradScaler(device.type)
     writer = SummaryWriter(log_dir=Path(args.output_dir) / 'logs') if rank == 0 else None
@@ -54,6 +60,8 @@ def train_anchor(rank, world_size, args):
 
         text_encoder.load_state_dict(checkpoint['text_encoder'])
         image_encoder.load_state_dict(checkpoint['image_encoder'])
+        contrastive_loss.load_state_dict(checkpoint['contrastive_loss'])
+
         global_step = checkpoint["global_step"]
         best_loss = checkpoint["best_loss"]
         start_epoch = checkpoint["epoch"] + 1
@@ -63,6 +71,7 @@ def train_anchor(rank, world_size, args):
 
     image_encoder = wrap_model(rank, image_encoder)
     text_encoder = wrap_model(rank, text_encoder)
+    contrastive_loss = wrap_model(rank, contrastive_loss)
 
     for epoch in range(start_epoch, args.epochs + 1):
         image_encoder.train()
@@ -93,7 +102,7 @@ def train_anchor(rank, world_size, args):
             with torch.autocast(device.type):
                 image_embeds = image_encoder(pixel_values=images)
                 raw_text_embeds = text_encoder(input_ids=input_ids_raw, attention_mask=attention_mask_raw)
-                loss = cosine_contrastive_loss(raw_text_embeds, image_embeds)
+                loss = contrastive_loss(raw_text_embeds, image_embeds)
 
             optimizer.zero_grad()
             scaler.scale(loss).backward()
@@ -107,6 +116,7 @@ def train_anchor(rank, world_size, args):
             if rank == 0 and global_step % 100 == 0:
                 if writer is not None:
                     writer.add_scalar('Loss/anchor_step', loss.item(), global_step)
+                    writer.add_scalar('Loss/temperature', contrastive_loss.temperature.item(), global_step)
             global_step += 1
 
         avg_loss = total_loss / len(dataloader)
@@ -116,6 +126,7 @@ def train_anchor(rank, world_size, args):
 
             text_encoder_state = text_encoder.module.state_dict() if hasattr(text_encoder, "module") else text_encoder.state_dict()
             image_encoder_state = image_encoder.module.state_dict() if hasattr(image_encoder, "module") else image_encoder.state_dict()
+            contrastive_loss_state = contrastive_loss.module.state_dict() if hasattr(contrastive_loss, "module") else contrastive_loss.state_dict()
 
             if avg_loss < best_loss:
                 best_loss = avg_loss
@@ -123,12 +134,13 @@ def train_anchor(rank, world_size, args):
                 weights_path.mkdir(parents=True, exist_ok=True)
                 torch.save(text_encoder_state, weights_path / 'text_encoder.pth')
                 torch.save(image_encoder_state, weights_path / 'image_encoder.pth')
+                torch.save(contrastive_loss_state, weights_path / 'contrastive_loss.pth')
                 print(f'[Epoch {epoch}] Encoder weights saved with loss {avg_loss:.4f}', flush=True)
 
             checkpoint = {
                 'text_encoder': text_encoder_state,
                 'image_encoder': image_encoder_state,
-                'optimizer': optimizer.state_dict(),
+                'contrastive_loss': contrastive_loss_state,
                 'global_step': global_step,
                 'best_loss': best_loss,
                 'epoch': epoch

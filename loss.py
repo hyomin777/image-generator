@@ -1,23 +1,28 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 
-def cosine_contrastive_loss(text_embeds, image_embeds, temperature=0.07):
-    # normalize embeddings
-    text_embeds = F.normalize(text_embeds, dim=-1)
-    image_embeds = F.normalize(image_embeds, dim=-1)
+class ContrastiveLoss(nn.Module):
+    def __init__(self, init_temp=0.07):
+        super().__init__()
+        log_tau = torch.log(torch.tensor(init_temp))
+        self.log_temp = nn.Parameter(log_tau)
 
-    # similarity matrix
-    logits_per_text = text_embeds @ image_embeds.T / temperature  # (B, B)
-    logits_per_image = logits_per_text.T  # (B, B)
+    @property
+    def temperature(self) -> torch.Tensor:
+        return self.log_temp.exp().clamp(1e-4, 1e4)
 
-    # ground truth labels (diagonal is positive)
-    batch_size = text_embeds.size(0)
-    labels = torch.arange(batch_size, device=text_embeds.device)
+    def forward(self, text_embeds, image_embeds):
+        text_embeds = F.normalize(text_embeds, dim=-1)
+        image_embeds = F.normalize(image_embeds, dim=-1)
 
-    # cross-entropy losses
-    loss_t2i = F.cross_entropy(logits_per_text, labels)  # text → image
-    loss_i2t = F.cross_entropy(logits_per_image, labels)  # image → text
+        logits = text_embeds @ image_embeds.T
+        logits = logits / self.temperature
 
-    return (loss_t2i + loss_i2t) / 2
+        batch_size = logits.size(0)
+        labels = torch.arange(batch_size, device=logits.device)
 
+        loss_t2i = F.cross_entropy(logits, labels)
+        loss_i2t = F.cross_entropy(logits.T, labels)
+        return 0.5 * (loss_t2i + loss_i2t)
