@@ -116,7 +116,7 @@ def train_anchor(rank, world_size, args):
             if rank == 0 and global_step % 100 == 0:
                 if writer is not None:
                     writer.add_scalar('Loss/anchor_step', loss.item(), global_step)
-                    writer.add_scalar('Loss/temperature', contrastive_loss.temperature.item(), global_step)
+                    writer.add_scalar('Loss/temperature', contrastive_loss.module.temperature.item(), global_step)
             global_step += 1
 
         avg_loss = total_loss / len(dataloader)

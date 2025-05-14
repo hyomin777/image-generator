@@ -6,7 +6,7 @@ sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler
+from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, DDIMScheduler
 from encoder.text_encoder import TextEncoder
 from tokenizer.tokenizer import load_tokenizer
 
@@ -30,6 +30,8 @@ class ImageGenerator(nn.Module):
         self.unet = load_unet()
         self.scheduler = DDPMScheduler.from_pretrained(
             "CompVis/stable-diffusion-v1-4", subfolder="scheduler")
+        self.infer_scheduler = DDIMScheduler.from_pretrained(
+            "CompVis/stable-diffusion-v1-4", subfolder="scheduler")
 
         self.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
@@ -50,7 +52,7 @@ class ImageGenerator(nn.Module):
 
         with torch.no_grad():
             text_embeddings = self.text_encoder(input_ids=text_input_ids, attention_mask=attention_mask, return_pooled=False)
-        
+
         return text_embeddings
 
     def decode_latents(self, latents):
@@ -76,10 +78,10 @@ class ImageGenerator(nn.Module):
             dtype=self.dtype
         )
 
-        self.scheduler.set_timesteps(num_inference_steps)
-        for t in self.scheduler.timesteps:
+        self.infer_scheduler.set_timesteps(num_inference_steps)
+        for t in self.infer_scheduler.timesteps:
             latent_model_input = torch.cat([latents] * 2)
-            latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+            latent_model_input = self.infer_scheduler.scale_model_input(latent_model_input, t)
             t_tensor = t.to(unet_device)
 
             with torch.no_grad():
@@ -89,11 +91,11 @@ class ImageGenerator(nn.Module):
 
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-            latents = self.scheduler.step(noise_pred, t, latents).prev_sample.to(self.dtype)
+            latents = self.infer_scheduler.step(noise_pred, t, latents).prev_sample.to(self.dtype)
 
         return self.decode_latents(latents)
 
-    def train_step(self, image, text):
+    def train_step(self, image, text, cond_dropout_prob=0.1):
         vae_device = next(self.vae.parameters()).device
         unet_device = next(self.unet.parameters()).device
 
@@ -101,33 +103,21 @@ class ImageGenerator(nn.Module):
             latent = self.vae.encode(image.to(vae_device, self.dtype)).latent_dist.sample()
             latent = latent * 0.18215
 
-            latent_mean = latent.mean().item()
-            latent_std = latent.std().item()
-            if torch.isnan(latent).any() or torch.isinf(latent).any():
-                print(f"[Warning] NaN or INF detected in latent! mean={latent_mean:.6f}, std={latent_std:.6f}")
-                return None
-
-            if latent_std > 3.0 or latent_std < 0.3:
-                print(f"[train_step] Abnormal latent std detected! mean={latent_mean:.6f}, std={latent_std:.6f}")
-                return None
-
         latent = latent.to(unet_device)
         bsz = latent.shape[0]
-
-        self.scheduler.set_timesteps(num_inference_steps=self.scheduler.config.num_train_timesteps)
 
         t = torch.randint(0, self.scheduler.config.num_train_timesteps, (bsz,), device=unet_device).long()
         noise = torch.randn_like(latent).to(unet_device)
         noisy_latent = self.scheduler.add_noise(latent, noise, t)
 
-        text_embed = self.encode_text(text, 'longest')
-        noise_pred = self.unet(noisy_latent, t, encoder_hidden_states=text_embed).sample
+        if torch.rand(1).item() < cond_dropout_prob:
+            text = [""] * bsz
+
+        text_embed = self.encode_text(text, padding='longest').to(unet_device)
+
+        scaled_latent = self.scheduler.scale_model_input(noisy_latent, t)
+        noise_pred = self.unet(scaled_latent, t, encoder_hidden_states=text_embed).sample
         loss = F.mse_loss(noise_pred, noise)
-
-        if torch.isnan(loss) or  torch.isinf(loss):
-            print(f"[train_step] Invalid loss: {loss.item():.4f}")
-            return None
-
         return loss
 
 

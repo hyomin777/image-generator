@@ -58,9 +58,9 @@ def fsdp_main(rank, world_size, args):
     dataloader = DataLoader(dataset, sampler=sampler, batch_size=args.batch_size, num_workers=args.num_workers, collate_fn=skip_broken_collate_fn)
 
     # Optimizer & Scaler & Scheduler
-    optimizer = torch.optim.AdamW(model.unet.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(model.unet.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scaler = torch.GradScaler(device.type)
-    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=1e-6)
+    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=20, T_mult=2, eta_min=5e-7)
 
     # TensorBoard
     writer = SummaryWriter(log_dir=Path(args.output_dir) / 'logs') if rank == 0 else None
@@ -96,6 +96,8 @@ def fsdp_main(rank, world_size, args):
     print(f"Rank={rank}, UNet param count: {sum(p.numel() for p in model.unet.parameters())}")
     print(f"Rank={rank}, TextEncoder param count: {sum(p.numel() for p in model.text_encoder.parameters())}")
     print(f"Rank={rank}, VAE param count: {sum(p.numel() for p in model.vae.parameters())}")
+
+    torch.autograd.set_detect_anomaly(True)
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         total_loss = 0.0
@@ -181,11 +183,12 @@ def parse_args():
     parser.add_argument("--tokenizer_path", type=str, default='tokenizer/tokenizer.json')
     parser.add_argument("--text_encoder_path", type=str, default='output/weights/text_encoder.pth')
     parser.add_argument("--output_dir", type=str, default="output")
-    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--epochs", type=int, default=500)
     parser.add_argument("--batch_size", type=int, default=60)
     parser.add_argument("--num_workers", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--clip_grad", type=float, default=5.0)
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--clip_grad", type=float, default=1.0)
     parser.add_argument("--resume", type=str, default=None)
     return parser.parse_args()
 
