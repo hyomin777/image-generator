@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, DDIMScheduler
+from transformers import CLIPTokenizer, CLIPTextModel
 from encoder.text_encoder import TextEncoder
 from tokenizer.tokenizer import load_tokenizer
 
@@ -36,12 +37,12 @@ class ImageGenerator(nn.Module):
         self.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
 
-    def encode_text(self, text, padding='max_length'):
+    def encode_text(self, text, max_length=128, padding='max_length'):
         if isinstance(text, str):
             text = [text]
 
         text_inputs = self.tokenizer(
-            text, padding=padding, max_length=128,
+            text, padding=padding, max_length=max_length,
             truncation=True, return_tensors="pt"
         )
 
@@ -119,6 +120,41 @@ class ImageGenerator(nn.Module):
         noise_pred = self.unet(scaled_latent, t, encoder_hidden_states=text_embed).sample
         loss = F.mse_loss(noise_pred, noise)
         return loss
+
+
+class PretrainedImageGenerator(ImageGenerator):
+    def __init__(self, device, text_encoder_path=None, tokenizer_path=None):
+        super().__init__(device, text_encoder_path, tokenizer_path)
+
+        self.tokenizer = CLIPTokenizer.from_pretrained(
+            "openai/clip-vit-large-patch14"
+        )
+        self.text_encoder = CLIPTextModel.from_pretrained(
+            "openai/clip-vit-large-patch14"
+        ).to(self.device)
+        self.unet = UNet2DConditionModel.from_pretrained(
+            "CompVis/stable-diffusion-v1-4", subfolder="unet"
+        ).to(self.device).to(self.dtype)
+
+        self.text_encoder.requires_grad_(False)
+
+    def encode_text(self, text, max_length=77, padding='max_length'):
+        encoder_device = next(self.text_encoder.parameters()).device
+        if isinstance(text, str):
+            text = [text]
+        text_inputs = self.tokenizer(
+            text,
+            padding=padding,
+            max_length=max_length,
+            truncation=True,
+            return_tensors="pt"
+        ).to(encoder_device)
+        with torch.no_grad():
+            outputs = self.text_encoder(
+                input_ids=text_inputs.input_ids,
+                attention_mask=text_inputs.attention_mask
+            )
+        return outputs.last_hidden_state  # (B, 77, D)
 
 
 def load_unet():

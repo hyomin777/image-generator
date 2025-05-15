@@ -4,141 +4,51 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 
 import argparse
-from pathlib import Path
 
 import torch
-import torch.optim as optim
-from torchvision.utils import make_grid
-from tqdm import tqdm
 
-from image_generator import ImageGenerator
-from dataset import RefinedImageDataset, LMDBImageDataset
-from utils.temp_manager import wait_for_cooldown
-from utils.save_model import save_checkpoint, load_checkpoint, save_weights
-from setup_training import setup, cleanup, summary_writer, setup_train_dataloader, wrap_model
+from dataset import LMDBImageDataset
+from image_generator import PretrainedImageGenerator
+from trainer import GeneratorTrainer, TrainConfig
 
 
-def train_generator(args):
-    setup()
-    device = torch.device(f'cuda:{args.local_rank}')
+def train_generator(rank, world_size, args):
+    config = TrainConfig(
+        num_workers=args.num_workers,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        clip_grad=args.clip_grad,
+        output_dir=args.output_dir,
+        resume=args.resume
+    )
+    device = torch.device("cuda", rank)
+    model = PretrainedImageGenerator(device, args.text_encoder_path, args.tokenizer_path)
+    optimizer = torch.optim.AdamW(model.unet.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    dataset = LMDBImageDataset(args.data_dir)
 
-    # image generator
-    image_generator = ImageGenerator(device, args.tokenizer_path)
-
-    # dataset
-    dataloader = setup_train_dataloader(args, LMDBImageDataset)
-
-    # optimizer
-    params_to_optimize = [p for p in image_generator.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(params_to_optimize, lr=args.lr)
-
-    # Mixed Precision scaler
-    scaler = torch.GradScaler(device.type)
-
-    # tensorboard writer
-    writer = None
-    if args.local_rank == 0:
-        writer = summary_writer(args)
-
-    if args.resume_epoch:
-        _, _, image_generator.unet = load_checkpoint(image_generator.unet, device, optimizer, Path(args.output_dir), f'generator_unet_{args.resume_epoch}')
-        start_epoch, best_loss, image_generator.text_encoder = load_checkpoint(image_generator.text_encoder, device, optimizer, Path(args.output_dir), f'generator_text_encoder_{args.resume_epoch}')
-    else:
-       start_epoch, best_loss = 1, float('inf')
-
-    image_generator = wrap_model(args.local_rank, image_generator)
-
-    # train loop
-    global_step = max(1, (start_epoch - 1) * len(dataloader))
-    for epoch in range(start_epoch, args.epochs + 1):
-        image_generator.train()
-        total_loss = 0.0
-        dataloader.sampler.set_epoch(epoch)
-        progress_bar = tqdm(dataloader, desc=f"[GPU {args.local_rank}] Epoch {epoch}", disable=(args.local_rank != 0))
-
-        num_skipped_batches = 0
-        last_loss_value = None
-        for batch in dataloader:
-            if batch is None:
-                progress_bar.update(1)
-                continue
-
-            if global_step % 50 == 0:
-                wait_for_cooldown(gpu_id=args.local_rank)
-
-            images = batch["image"]
-            raw_text = [t['raw_text'] for t in batch["text"]]
-
-            optimizer.zero_grad()
-
-            with torch.autocast(device.type):
-                loss = image_generator.module.train_step(images, raw_text)
-
-            if loss is None:
-                num_skipped_batches += 1
-                progress_bar.update(1)
-                continue
-
-            last_loss_value = loss.item()
-
-            scaler.scale(loss).backward()
-            torch.nn.utils.clip_grad_norm_(image_generator.parameters(), max_norm=0.5)
-            scaler.step(optimizer)
-            scaler.update()
-
-            total_loss += loss.item()
-            progress_bar.update(1)
-            progress_bar.set_postfix({"loss": loss.item()})
-
-            if args.local_rank == 0 and writer is not None:
-                global_step += 1
-                if global_step % 200 == 0:
-                    writer.add_scalar('Loss/generator_step', loss.item(), global_step)
-
-        avg_loss = total_loss / len(dataloader)
-        if args.local_rank == 0 and avg_loss < best_loss:
-            best_loss = avg_loss
-            save_weights(image_generator.module.unet, 'unet', Path(args.output_dir))
-            save_weights(image_generator.module.text_encoder, 'text_encoder', Path(args.output_dir))
-            print(f'[Epoch {epoch}] Generator saved with loss {avg_loss:.4f}', flush=True)
-
-        if args.local_rank == 0:
-            print(f"[Epoch {epoch}] Skipped {num_skipped_batches} batches due to NaN or INF")
-            save_checkpoint(
-                epoch,
-                image_generator.module.unet,
-                optimizer, best_loss, Path(args.output_dir), f'generator_unet_{epoch}')
-            save_checkpoint(
-                epoch,
-                image_generator.module.text_encoder,
-                optimizer, best_loss, Path(args.output_dir), f'generator_text_encoder_{epoch}')
-            writer.add_scalar('Loss/generator_epoch', avg_loss, epoch)
-
-            image_generator.eval()
-            with torch.no_grad():
-                sample_text = ['1girl black_shirt black_skirt blue_archive black_halo shiroko_(blue_archive)']
-                generated_image = image_generator.module(sample_text)
-                grid = make_grid(generated_image, nrow=1)
-                writer.add_image(f'Generated/Epoch_{epoch}', grid, epoch)
-    cleanup()
+    trainer = GeneratorTrainer(rank, world_size, device, model, optimizer, config)
+    trainer.train(dataset)
 
 
-def main():
+def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="/mnt/hhd/dataset")
-    parser.add_argument("--tokenizer_path", type=str, default="tokenizer/tokenizer.json")
-    parser.add_argument("--text_encoder_path", type=str, default="output/weights/text_encoder.pth")
+    parser.add_argument("--data_dir", type=str, required=True)
+    parser.add_argument("--tokenizer_path", type=str, default='tokenizer/tokenizer.json')
+    parser.add_argument("--text_encoder_path", type=str, default='output/weights/text_encoder.pth')
     parser.add_argument("--output_dir", type=str, default="output")
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--num_workers", type=int, default=6)
-    parser.add_argument("--local_rank", type=int, default=os.environ.get("LOCAL_RANK", 0))
-    parser.add_argument("--resume_epoch", type=int)
-    args = parser.parse_args()
+    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument("--batch_size", type=int, default=12)
+    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--clip_grad", type=float, default=1.0)
+    parser.add_argument("--resume", type=str, default="")
+    return parser.parse_args()
 
-    train_generator(args)
-
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    args = parse_args()
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    train_generator(local_rank, world_size, args)
