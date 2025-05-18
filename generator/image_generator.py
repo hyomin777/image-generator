@@ -8,27 +8,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, DDIMScheduler
 from transformers import CLIPTokenizer, CLIPTextModel
-from encoder.text_encoder import TextEncoder
-from tokenizer.tokenizer import load_tokenizer
 
 
 class ImageGenerator(nn.Module):
-    def __init__(self, device, text_encoder_path, tokenizer_path):
+    def __init__(self, device):
         super().__init__()
         self.device = device
         self.dtype = torch.float32
 
-        self.tokenizer = load_tokenizer(tokenizer_path)
+        self.tokenizer = CLIPTokenizer.from_pretrained(
+            "openai/clip-vit-large-patch14"
+        )
 
-        text_encoder_state_dict = torch.load(text_encoder_path, map_location=self.device)
-        self.text_encoder = TextEncoder(
-            vocab_size=self.tokenizer.vocab_size
+        self.text_encoder = CLIPTextModel.from_pretrained(
+            "openai/clip-vit-large-patch14"
         ).to(self.device)
-        self.text_encoder.load_state_dict(text_encoder_state_dict)
+
+        self.unet = UNet2DConditionModel.from_pretrained(
+            "CompVis/stable-diffusion-v1-4", subfolder="unet"
+        ).to(self.device).to(self.dtype)
 
         self.vae = AutoencoderKL.from_pretrained(
             "stabilityai/sd-vae-ft-mse").to(self.device).to(self.dtype)
-        self.unet = load_unet()
+
         self.scheduler = DDPMScheduler.from_pretrained(
             "CompVis/stable-diffusion-v1-4", subfolder="scheduler")
         self.infer_scheduler = DDIMScheduler.from_pretrained(
@@ -37,24 +39,26 @@ class ImageGenerator(nn.Module):
         self.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
 
-    def encode_text(self, text, max_length=128, padding='max_length'):
+    def encode_text(self, text, max_length=77, padding='max_length'):
+        encoder_device = next(self.text_encoder.parameters()).device
+
         if isinstance(text, str):
             text = [text]
 
         text_inputs = self.tokenizer(
-            text, padding=padding, max_length=max_length,
-            truncation=True, return_tensors="pt"
-        )
-
-        encoder_device = next(self.text_encoder.parameters()).device
-
-        attention_mask = text_inputs.attention_mask.to(device=encoder_device)
-        text_input_ids = text_inputs.input_ids.to(encoder_device)
+            text,
+            padding=padding,
+            max_length=max_length,
+            truncation=True,
+            return_tensors="pt"
+        ).to(encoder_device)
 
         with torch.no_grad():
-            text_embeddings = self.text_encoder(input_ids=text_input_ids, attention_mask=attention_mask, return_pooled=False)
-
-        return text_embeddings
+            outputs = self.text_encoder(
+                input_ids=text_inputs.input_ids,
+                attention_mask=text_inputs.attention_mask
+            )
+        return outputs.last_hidden_state  # (B, 77, D)
 
     def decode_latents(self, latents):
         vae_device = next(self.vae.parameters()).device
@@ -120,64 +124,3 @@ class ImageGenerator(nn.Module):
         noise_pred = self.unet(scaled_latent, t, encoder_hidden_states=text_embed).sample
         loss = F.mse_loss(noise_pred, noise)
         return loss
-
-
-class PretrainedImageGenerator(ImageGenerator):
-    def __init__(self, device, text_encoder_path=None, tokenizer_path=None):
-        super().__init__(device, text_encoder_path, tokenizer_path)
-
-        self.tokenizer = CLIPTokenizer.from_pretrained(
-            "openai/clip-vit-large-patch14"
-        )
-        self.text_encoder = CLIPTextModel.from_pretrained(
-            "openai/clip-vit-large-patch14"
-        ).to(self.device)
-        self.unet = UNet2DConditionModel.from_pretrained(
-            "CompVis/stable-diffusion-v1-4", subfolder="unet"
-        ).to(self.device).to(self.dtype)
-
-        self.text_encoder.requires_grad_(False)
-
-    def encode_text(self, text, max_length=77, padding='max_length'):
-        encoder_device = next(self.text_encoder.parameters()).device
-        if isinstance(text, str):
-            text = [text]
-        text_inputs = self.tokenizer(
-            text,
-            padding=padding,
-            max_length=max_length,
-            truncation=True,
-            return_tensors="pt"
-        ).to(encoder_device)
-        with torch.no_grad():
-            outputs = self.text_encoder(
-                input_ids=text_inputs.input_ids,
-                attention_mask=text_inputs.attention_mask
-            )
-        return outputs.last_hidden_state  # (B, 77, D)
-
-
-def load_unet():
-    unet = UNet2DConditionModel(
-        sample_size=64,
-        in_channels=4,
-        out_channels=4,
-        layers_per_block=2,
-        block_out_channels=(320, 640, 1280, 1280),
-        down_block_types=(
-            "CrossAttnDownBlock2D",
-            "CrossAttnDownBlock2D",
-            "CrossAttnDownBlock2D",
-            "DownBlock2D",
-        ),
-        up_block_types=(
-            "UpBlock2D",
-            "CrossAttnUpBlock2D",
-            "CrossAttnUpBlock2D",
-            "CrossAttnUpBlock2D",
-        ),
-        cross_attention_dim=768,
-        attention_head_dim=8,
-    )
-
-    return unet
