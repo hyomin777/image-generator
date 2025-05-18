@@ -221,7 +221,6 @@ class GeneratorTrainer(ModelTrainer):
                 print(f"[WARNING] Could not load checkpoint {self.config.resume}, starting from scratch")
 
         torch.autograd.set_detect_anomaly(True)
-
         if self.rank == 0:
             print(f"[INFO] Starting training from epoch {self.start_epoch} to {self.config.epochs}")
 

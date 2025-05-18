@@ -184,25 +184,26 @@ class LMDBImageDataset(Dataset):
 
         if is_train:
             self.transform = transforms.Compose([
-                transforms.Resize((224, 224)),
+                transforms.Resize((512, 512)),
                 transforms.RandomApply([
                     transforms.ColorJitter(
-                        brightness=0.05,
-                        contrast=0.05,
-                        saturation=0.05,
-                        hue=0.02
+                        brightness=0.02,
+                        contrast=0.02,
+                        saturation=0.02,
+                        hue=0.01
                     )
-                ], p=0.5),
+                ], p=0.2),
                 transforms.RandomHorizontalFlip(p=0.5),
-                transforms.ToTensor()
+                transforms.ToTensor(),
+                transforms.Normalize([0.5]*3, [0.5]*3)
             ])
         else:
             self.transform = transforms.Compose([
                 transforms.Resize((224, 224)),
                 transforms.ToTensor(),
                 transforms.Normalize(
-                    mean=[0.48145466, 0.4578275, 0.40821073],
-                    std=[0.26862954, 0.26130258, 0.27577711]
+                    mean=[0.5, 0.5, 0.5],
+                    std=[0.5, 0.5, 0.5]
                 )
             ])
 
